@@ -69,6 +69,20 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     audio_retention_days: int = 7
 
+    # --- Fase 1: banco, fila, servidor ---
+    db_path: Path = Path("data/primocut.db")
+    redis_url: str = "redis://localhost:6379/0"
+    rq_queue: str = "primocut"
+    # Timeout do job RQ (s). O pipeline pode levar dezenas de min (download do
+    # modelo na 1ª vez + transcrição de lives longas). Default folgado: 6h.
+    rq_job_timeout: int = 6 * 3600
+    # Lock de GPU: garante 1 transcrição por vez, independentemente de quantos
+    # workers rodem. `timeout` = lease (auto-libera se o worker morrer); deve ser
+    # maior que a transcrição mais longa possível.
+    gpu_lock_timeout: int = 2 * 3600
+    serve_host: str = "127.0.0.1"
+    serve_port: int = 8000
+
 
 def get_settings() -> Settings:
     """Instancia as configurações lendo ambiente/.env no momento da chamada."""

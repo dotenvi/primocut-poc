@@ -36,6 +36,16 @@ class VideoStatus(str, Enum):
     ANALYZING = "analyzing"
     DONE = "done"
     ERROR = "error"
+    STOPPED = "stopped"
+
+
+# Estados em que o vídeo está sendo processado ativamente (não deletável direto).
+ACTIVE_STATUSES = {
+    VideoStatus.QUEUED.value,
+    VideoStatus.DOWNLOADING.value,
+    VideoStatus.TRANSCRIBING.value,
+    VideoStatus.ANALYZING.value,
+}
 
 
 class TopicStatus(str, Enum):
@@ -132,6 +142,7 @@ class CutMoment(BaseModel):
     start: float
     end: float
     score: float = Field(ge=0.0, le=1.0)
+    status: TopicStatus = TopicStatus.NEW
 
 
 class Report(BaseModel):
