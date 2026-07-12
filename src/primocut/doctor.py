@@ -114,6 +114,43 @@ def check_api_key(settings: Settings) -> CheckResult:
     )
 
 
+def check_redis(settings: Settings) -> CheckResult:
+    """Redis acessível (fila RQ)."""
+    name = "Redis"
+    try:
+        import redis
+    except ImportError:
+        return CheckResult(
+            name=name, ok=False, detail="pacote redis não instalado",
+            fix="/usr/bin/python3 -m pip --python .venv/bin/python install redis",
+        )
+    try:
+        client = redis.Redis.from_url(settings.redis_url, socket_connect_timeout=1)
+        client.ping()
+    except Exception as exc:  # servidor fora do ar / URL errada
+        return CheckResult(
+            name=name, ok=False, detail=str(exc),
+            fix="Suba o Redis: `sudo apt install redis-server` (ou `docker run -p 6379:6379 redis`).",
+        )
+    return CheckResult(name=name, ok=True, detail=settings.redis_url)
+
+
+def check_db(settings: Settings) -> CheckResult:
+    """Banco SQLite abre e migra."""
+    name = "Banco (SQLite)"
+    try:
+        from .db import Database
+
+        db = Database.from_settings(settings)
+        db.init()
+    except Exception as exc:
+        return CheckResult(
+            name=name, ok=False, detail=str(exc),
+            fix="Verifique permissão de escrita em data/ (PRIMOCUT_DB_PATH).",
+        )
+    return CheckResult(name=name, ok=True, detail=str(settings.db_path))
+
+
 def check_llm_sdk(settings: Settings) -> CheckResult:
     """Confirma que o SDK do provedor de LLM selecionado está instalado."""
     provider = settings.llm_provider.lower()
@@ -139,5 +176,7 @@ def run_diagnostics(settings: Settings | None = None) -> DiagnosticsReport:
             check_ytdlp(),
             check_api_key(settings),
             check_llm_sdk(settings),
+            check_redis(settings),
+            check_db(settings),
         ]
     )

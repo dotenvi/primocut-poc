@@ -86,21 +86,55 @@ def test_check_llm_sdk_present(mocker):
     assert r.ok is True
 
 
-def test_run_diagnostics_aggregates(mocker):
+def _fake_redis_ok(mocker):
+    import redis
+
+    fake_client = mocker.MagicMock()
+    fake_client.ping.return_value = True
+    mocker.patch.object(redis.Redis, "from_url", return_value=fake_client)
+
+
+def test_check_redis_ok(mocker):
+    _fake_redis_ok(mocker)
+    r = doctor.check_redis(Settings())
+    assert r.ok is True
+
+
+def test_check_redis_down(mocker):
+    import redis
+
+    mocker.patch.object(redis.Redis, "from_url", side_effect=ConnectionError("recusou"))
+    r = doctor.check_redis(Settings())
+    assert r.ok is False
+    assert "redis" in (r.fix or "").lower()
+
+
+def test_check_db_ok(tmp_path):
+    r = doctor.check_db(Settings(db_path=tmp_path / "x.db"))
+    assert r.ok is True
+
+
+def test_run_diagnostics_aggregates(mocker, tmp_path):
     mocker.patch.object(doctor.importlib.util, "find_spec", return_value=None)
     mocker.patch.object(doctor.shutil, "which", return_value=None)
     mocker.patch.object(doctor.subprocess, "run", side_effect=FileNotFoundError())
-    report = doctor.run_diagnostics(Settings(anthropic_api_key=None))
-    assert len(report.checks) == 5
+    import redis
+
+    mocker.patch.object(redis.Redis, "from_url", side_effect=ConnectionError("down"))
+    report = doctor.run_diagnostics(
+        Settings(anthropic_api_key=None, db_path=tmp_path / "x.db")
+    )
+    assert len(report.checks) == 7
     assert report.ok is False
-    # todos falharam neste cenário
-    assert all(c.ok is False for c in report.checks)
 
 
-def test_run_diagnostics_all_ok(mocker):
+def test_run_diagnostics_all_ok(mocker, tmp_path):
     mocker.patch.object(doctor.importlib.util, "find_spec", return_value=object())
     mocker.patch.object(doctor.shutil, "which", return_value="/usr/bin/x")
     fake = subprocess.CompletedProcess(["nvidia-smi"], 0, "RTX 3070 Ti", "")
     mocker.patch.object(doctor.subprocess, "run", return_value=fake)
-    report = doctor.run_diagnostics(Settings(anthropic_api_key="sk-ant-xyz"))
+    _fake_redis_ok(mocker)
+    report = doctor.run_diagnostics(
+        Settings(anthropic_api_key="sk-ant-xyz", db_path=tmp_path / "x.db")
+    )
     assert report.ok is True
