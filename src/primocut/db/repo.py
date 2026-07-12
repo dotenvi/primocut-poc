@@ -1,0 +1,239 @@
+"""DAO: conversões entre os modelos pydantic (Fase 0) e as linhas ORM.
+
+Funções "pipeline-facing" retornam modelos pydantic (para reusar as etapas da
+Fase 0). Funções "API-facing" retornam linhas ORM (com id/status) para marcação.
+"""
+
+from __future__ import annotations
+
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
+
+from ..models import (
+    ChatSignal,
+    CutMoment,
+    MinuteBucket,
+    Peak,
+    Segment,
+    Topic,
+    TopicStatus,
+    Transcript,
+    Video,
+    VideoStatus,
+)
+from .models import (
+    ChatSignalRow,
+    CutMomentRow,
+    JobRow,
+    TopicRow,
+    TranscriptRow,
+    VideoRow,
+)
+
+# ------------------------- Video -------------------------
+
+
+def upsert_video(s: Session, video: Video) -> VideoRow:
+    row = s.get(VideoRow, video.id)
+    if row is None:
+        row = VideoRow(id=video.id)
+        s.add(row)
+    row.url = video.url
+    row.title = video.title
+    row.channel = video.channel
+    row.duration = video.duration
+    row.status = video.status.value
+    s.flush()
+    return row
+
+
+def get_video(s: Session, video_id: str) -> VideoRow | None:
+    return s.get(VideoRow, video_id)
+
+
+def list_videos(s: Session) -> list[VideoRow]:
+    return list(
+        s.execute(select(VideoRow).order_by(VideoRow.created_at.desc())).scalars()
+    )
+
+
+def set_video_status(s: Session, video_id: str, status: VideoStatus | str) -> None:
+    row = s.get(VideoRow, video_id)
+    if row is not None:
+        row.status = status.value if isinstance(status, VideoStatus) else status
+
+
+def update_video_meta(s: Session, video: Video) -> VideoRow:
+    """Atualiza só metadados (url/title/channel/duration); status é gerido à parte."""
+    row = s.get(VideoRow, video.id)
+    if row is None:
+        row = VideoRow(id=video.id, status=video.status.value)
+        s.add(row)
+    row.url = video.url
+    row.title = video.title
+    row.channel = video.channel
+    row.duration = video.duration
+    s.flush()
+    return row
+
+
+def delete_video(s: Session, video_id: str) -> bool:
+    """Apaga o vídeo e TUDO relacionado (cascade FK: jobs/transcripts/topics/…)."""
+    if s.get(VideoRow, video_id) is None:
+        return False
+    s.execute(delete(VideoRow).where(VideoRow.id == video_id))
+    return True
+
+
+def video_to_model(row: VideoRow) -> Video:
+    return Video(
+        id=row.id, url=row.url, title=row.title, channel=row.channel,
+        duration=row.duration, status=VideoStatus(row.status),
+    )
+
+
+# ------------------------- Job -------------------------
+
+
+def create_job(s: Session, video_id: str, rq_job_id: str | None = None) -> JobRow:
+    row = JobRow(video_id=video_id, rq_job_id=rq_job_id, status="queued")
+    s.add(row)
+    s.flush()
+    return row
+
+
+def update_job(s: Session, job_id: int, **fields) -> JobRow | None:
+    row = s.get(JobRow, job_id)
+    if row is not None:
+        for k, v in fields.items():
+            setattr(row, k, v)
+    return row
+
+
+def latest_job(s: Session, video_id: str) -> JobRow | None:
+    return s.execute(
+        select(JobRow).where(JobRow.video_id == video_id).order_by(JobRow.id.desc())
+    ).scalars().first()
+
+
+# ------------------------- Transcript -------------------------
+
+
+def save_transcript(s: Session, transcript: Transcript) -> None:
+    row = s.execute(
+        select(TranscriptRow).where(TranscriptRow.video_id == transcript.video_id)
+    ).scalars().first()
+    if row is None:
+        row = TranscriptRow(video_id=transcript.video_id)
+        s.add(row)
+    row.language = transcript.language
+    row.model = transcript.model
+    row.segments = [seg.model_dump() for seg in transcript.segments]
+
+
+def get_transcript(s: Session, video_id: str) -> Transcript | None:
+    row = s.execute(
+        select(TranscriptRow).where(TranscriptRow.video_id == video_id)
+    ).scalars().first()
+    if row is None:
+        return None
+    return Transcript(
+        video_id=row.video_id, language=row.language, model=row.model,
+        segments=[Segment(**d) for d in row.segments],
+    )
+
+
+# ------------------------- ChatSignal -------------------------
+
+
+def save_chat_signal(s: Session, signal: ChatSignal) -> None:
+    row = s.execute(
+        select(ChatSignalRow).where(ChatSignalRow.video_id == signal.video_id)
+    ).scalars().first()
+    if row is None:
+        row = ChatSignalRow(video_id=signal.video_id)
+        s.add(row)
+    row.per_minute = [b.model_dump() for b in signal.per_minute]
+    row.peaks = [p.model_dump() for p in signal.peaks]
+
+
+def get_chat_signal(s: Session, video_id: str) -> ChatSignal | None:
+    row = s.execute(
+        select(ChatSignalRow).where(ChatSignalRow.video_id == video_id)
+    ).scalars().first()
+    if row is None:
+        return None
+    return ChatSignal(
+        video_id=row.video_id,
+        per_minute=[MinuteBucket(**d) for d in row.per_minute],
+        peaks=[Peak(**d) for d in row.peaks],
+    )
+
+
+# ------------------------- Topics / Moments -------------------------
+
+
+def save_topics(s: Session, video_id: str, topics: list[Topic]) -> None:
+    s.execute(delete(TopicRow).where(TopicRow.video_id == video_id))
+    for i, t in enumerate(topics):
+        s.add(TopicRow(
+            video_id=video_id, ordinal=i, title=t.title, summary=t.summary,
+            start=t.start, end=t.end, score=t.score, status=t.status.value,
+        ))
+
+
+def get_topics(s: Session, video_id: str) -> list[Topic]:
+    rows = s.execute(
+        select(TopicRow).where(TopicRow.video_id == video_id).order_by(TopicRow.ordinal)
+    ).scalars()
+    return [
+        Topic(title=r.title, summary=r.summary, start=r.start, end=r.end,
+              score=r.score, status=TopicStatus(r.status))
+        for r in rows
+    ]
+
+
+def get_topic_rows(s: Session, video_id: str) -> list[TopicRow]:
+    return list(s.execute(
+        select(TopicRow).where(TopicRow.video_id == video_id).order_by(TopicRow.ordinal)
+    ).scalars())
+
+
+def set_topic_status(s: Session, topic_id: int, status: str) -> TopicRow | None:
+    row = s.get(TopicRow, topic_id)
+    if row is not None:
+        row.status = status
+    return row
+
+
+def save_moments(s: Session, video_id: str, moments: list[CutMoment]) -> None:
+    s.execute(delete(CutMomentRow).where(CutMomentRow.video_id == video_id))
+    for i, m in enumerate(moments):
+        s.add(CutMomentRow(
+            video_id=video_id, ordinal=i, title=m.title, reason=m.reason,
+            start=m.start, end=m.end, score=m.score, status=m.status.value,
+        ))
+
+
+def get_moments(s: Session, video_id: str) -> list[CutMoment]:
+    rows = s.execute(
+        select(CutMomentRow).where(CutMomentRow.video_id == video_id).order_by(CutMomentRow.ordinal)
+    ).scalars()
+    return [
+        CutMoment(title=r.title, reason=r.reason, start=r.start, end=r.end,
+                  score=r.score, status=TopicStatus(r.status))
+        for r in rows
+    ]
+
+
+def get_moment_rows(s: Session, video_id: str) -> list[CutMomentRow]:
+    return list(s.execute(
+        select(CutMomentRow).where(CutMomentRow.video_id == video_id).order_by(CutMomentRow.ordinal)
+    ).scalars())
+
+
+def set_moment_status(s: Session, moment_id: int, status: str) -> CutMomentRow | None:
+    row = s.get(CutMomentRow, moment_id)
+    if row is not None:
+        row.status = status
+    return row
