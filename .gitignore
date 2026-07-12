@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.claude/
+
+# Artefatos de execução do spike
+data/
+*-report.md
+*.wav
+*.m4a
+*.mp3
+report*.md
+!docs/**
