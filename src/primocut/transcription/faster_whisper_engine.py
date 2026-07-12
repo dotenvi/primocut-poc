@@ -12,7 +12,7 @@ from typing import Any
 
 from ..config import Settings, get_settings
 from ..logging_conf import get_logger
-from ..models import Segment, Transcript
+from ..models import Segment, Transcript, format_timestamp
 
 logger = get_logger(__name__)
 
@@ -146,17 +146,29 @@ class FasterWhisperEngine:
             language=language,
             vad_filter=True,
         )
-        segments = [
-            Segment(
-                index=i,
-                start=float(s.start),
-                end=float(s.end),
+        total = float(getattr(info, "duration", 0.0) or 0.0)
+        if total:
+            logger.info("Transcrevendo ~%s de áudio…", format_timestamp(total))
+
+        # Consome o gerador logando progresso (o faster-whisper não emite nada
+        # por conta própria — sem isto, parece travado por minutos).
+        segments: list[Segment] = []
+        last_logged = 0.0
+        for i, s in enumerate(raw_segments):
+            segments.append(Segment(
+                index=i, start=float(s.start), end=float(s.end),
                 text=(s.text or "").strip(),
-            )
-            for i, s in enumerate(raw_segments)
-        ]
+            ))
+            if total and (s.end - last_logged) >= 30.0:  # a cada ~30s de áudio
+                last_logged = s.end
+                logger.info(
+                    "Transcrição: %s / %s (%d%%, %d segmentos)",
+                    format_timestamp(s.end), format_timestamp(total),
+                    int(min(100.0, s.end / total * 100)), i + 1,
+                )
+
         detected = getattr(info, "language", language) or language
-        logger.info("Transcrição: %d segmentos (idioma=%s)", len(segments), detected)
+        logger.info("Transcrição concluída: %d segmentos (idioma=%s)", len(segments), detected)
         return Transcript(
             video_id=video_id,
             language=detected,

@@ -108,6 +108,8 @@ def test_download_audio_falls_back_to_next_player_client(mocker, tmp_path):
         cmds.append(cmd)
         if "youtube:player_client=android" in cmd:
             raise subprocess.CalledProcessError(1, cmd)  # extrator quebrou p/ android
+        if "yt_dlp" in cmd:  # simula o download criando o arquivo comprimido
+            (tmp_path / "abc123DEF.src.webm").write_bytes(b"x")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     mocker.patch.object(audio.subprocess, "run", side_effect=fake_run)
@@ -127,6 +129,8 @@ def test_download_audio_builds_normalization_command(mocker, tmp_path):
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        if "yt_dlp" in cmd:  # simula o download criando o arquivo comprimido
+            (tmp_path / "abc123DEF.src.webm").write_bytes(b"x")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     mocker.patch.object(audio.subprocess, "run", side_effect=fake_run)

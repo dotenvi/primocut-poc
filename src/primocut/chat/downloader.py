@@ -78,7 +78,7 @@ def _default_live_chat_lines(url: str) -> list[str]:
         subprocess.run(
             [*YTDLP, "--skip-download", "--write-subs", "--sub-langs", "live_chat",
              "--no-warnings", "-o", template, url],
-            check=True, capture_output=True, text=True,
+            check=True, capture_output=True, text=True, stdin=subprocess.DEVNULL,
         )
         files = glob.glob(os.path.join(tmp, "*.live_chat.json"))
         if not files:

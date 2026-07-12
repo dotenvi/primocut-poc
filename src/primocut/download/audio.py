@@ -105,7 +105,7 @@ def fetch_metadata(url: str, settings: Settings | None = None) -> Video:
     def _run() -> dict:
         proc = subprocess.run(
             [*YTDLP, "-J", "--no-warnings", url],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, stdin=subprocess.DEVNULL,
         )
         return json.loads(proc.stdout)
 
@@ -131,8 +131,7 @@ def download_audio(
     settings = settings or get_settings()
     out_dir.mkdir(parents=True, exist_ok=True)
     vid = video_id or extract_video_id(url)
-    raw_template = str(out_dir / f"{vid}.%(ext)s")
-    wav_path = out_dir / f"{vid}.wav"
+    src_template = str(out_dir / f"{vid}.src.%(ext)s")
     normalized = out_dir / f"{vid}.16k.wav"
 
     # Retomada: se o WAV normalizado já existe, reaproveita (evita rebaixar).
@@ -144,16 +143,16 @@ def download_audio(
     attempts = [["--extractor-args", f"youtube:player_client={c}"] for c in clients] or [[]]
     policy = _retry_policy(settings)
 
-    # 1. yt-dlp extrai o melhor áudio para WAV — tenta cada player_client;
-    #    dentro de cada um, retry para erros transitórios de rede.
+    # 1. yt-dlp baixa APENAS o melhor áudio comprimido (sem converter p/ WAV):
+    #    evita um passe de ffmpeg e um arquivo intermediário gigante (vários GB).
     last_exc: Exception | None = None
     for extra in attempts:
         try:
             retry(
                 lambda e=extra: subprocess.run(
-                    [*YTDLP, "-x", "--audio-format", "wav", "--no-warnings", *e,
-                     "-o", raw_template, url],
-                    check=True,
+                    [*YTDLP, "-f", "bestaudio/best", "--no-warnings", *e,
+                     "-o", src_template, url],
+                    check=True, stdin=subprocess.DEVNULL,
                 ),
                 policy=policy, is_retryable=is_transient, label="download áudio",
             )
@@ -168,10 +167,28 @@ def download_audio(
             f"Último erro: {last_exc}"
         )
 
-    # 2. FFmpeg normaliza para 16kHz mono (entrada do Whisper).
+    src = _find_src(out_dir, vid)
+
+    # 2. Passe ÚNICO do FFmpeg: decodifica + reamostra p/ 16kHz mono.
+    #    `-stats` mostra progresso/velocidade em tempo real no log.
+    logger.info("Normalizando áudio para 16kHz mono (FFmpeg)…")
     subprocess.run(
-        ["ffmpeg", "-y", "-i", str(wav_path), "-ar", "16000", "-ac", "1", str(normalized)],
-        check=True,
+        # `-nostdin` + stdin=DEVNULL: sem isso, rodando em segundo plano (work-horse
+        # do RQ) o ffmpeg tenta ler o terminal, recebe SIGTTIN e fica SUSPENSO (T).
+        ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-stats", "-y",
+         "-i", str(src), "-ar", "16000", "-ac", "1", str(normalized)],
+        check=True, stdin=subprocess.DEVNULL,
     )
+    try:  # o comprimido não é mais necessário (o cache é o .16k.wav)
+        src.unlink()
+    except OSError:
+        pass
     logger.info("Áudio normalizado: %s", normalized)
     return normalized
+
+
+def _find_src(out_dir: Path, vid: str) -> Path:
+    matches = [p for p in out_dir.glob(f"{vid}.src.*") if p.is_file()]
+    if not matches:
+        raise RuntimeError(f"yt-dlp não gerou o arquivo de áudio para {vid}.")
+    return matches[0]
