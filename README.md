@@ -4,6 +4,7 @@ CLI que recebe a URL de uma live do YouTube e produz um relatório em Markdown c
 tópicos discutidos. Pipeline: **áudio → chat replay → transcrição → análise por LLM**.
 
 Fonte de verdade: [`docs/PRIMOCUT.md`](docs/PRIMOCUT.md).
+**Fase 1 (MVP web): [`docs/FASE1-MVP.md`](docs/FASE1-MVP.md).**
 Resumo da Fase 0 (handoff): [`docs/FASE0-RESUMO.md`](docs/FASE0-RESUMO.md).
 Plano da Fase 0: [`docs/FASE0-SPIKE-CLI-PLANO.md`](docs/FASE0-SPIKE-CLI-PLANO.md).
 Guia de execução: [`docs/FASE0-STATUS-E-EXECUCAO.md`](docs/FASE0-STATUS-E-EXECUCAO.md).
@@ -40,11 +41,23 @@ primocut doctor
 Valida GPU/CUDA (WSL2), FFmpeg, yt-dlp e a chave da API — e imprime o comando de
 correção para cada item ausente.
 
-## Executar o pipeline
+## Executar o pipeline (CLI, Fase 0)
 
 ```bash
 primocut run "https://www.youtube.com/watch?v=<ID>" -o report.md
 ```
+
+## App web (Fase 1)
+
+Precisa de Redis (`sudo apt install redis-server` ou `docker run -p 6379:6379 redis`).
+
+```bash
+cd frontend && npm install && npm run build && cd ..   # build da UI (uma vez)
+primocut worker    # processa a fila (terminal 1)
+primocut serve     # API + UI em http://127.0.0.1:8000 (terminal 2)
+```
+
+Detalhes em [`docs/FASE1-MVP.md`](docs/FASE1-MVP.md).
 
 ## Testes por módulo (isolados, sem GPU/rede)
 
