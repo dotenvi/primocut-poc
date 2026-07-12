@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "primocut"
+version = "0.0.0"
+description = "PRIMOCUT — Fase 0 (Spike CLI): URL de live -> áudio -> transcrição -> chat -> tópicos em Markdown"
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "anthropic>=0.40",
+    "rich>=13.7",
+    "faster-whisper>=1.0",
+    "chat-downloader>=0.2",
+    "yt-dlp>=2024.1",
+]
+
+[project.optional-dependencies]
+cuda = [
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12",
+]
+
+[project.scripts]
+primocut = "primocut.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

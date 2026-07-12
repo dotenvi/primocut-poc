@@ -1,0 +1,21 @@
+# Runtime deps (pip). Instale numa venv:
+#   python -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+#   pip install -e .            # registra o comando `primocut`
+typer>=0.12
+pydantic>=2.6
+pydantic-settings>=2.2
+anthropic>=0.40
+rich>=13.7
+
+# LLM provider alternativo (opcional). Só é importado se PRIMOCUT_LLM_PROVIDER=openai.
+# Instale quando for usar: pip install openai
+# openai>=1.40
+faster-whisper>=1.0
+chat-downloader>=0.2
+yt-dlp>=2024.1
+
+# CUDA no WSL2 (driver fica no Windows; libs via pip).
+# Descomente se o faster-whisper não achar cuBLAS/cuDNN no ambiente:
+# nvidia-cublas-cu12
+# nvidia-cudnn-cu12
