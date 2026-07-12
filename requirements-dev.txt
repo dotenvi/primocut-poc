@@ -1,3 +1,6 @@
 -r requirements.txt
 pytest>=8.0
 pytest-mock>=3.12
+fakeredis>=2.20
+httpx>=0.27
+httpx2>=2.5   # exigido pelo starlette.testclient (Starlette 1.3+); evita o DeprecationWarning

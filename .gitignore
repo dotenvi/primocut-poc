@@ -7,6 +7,8 @@ build/
 dist/
 .pytest_cache/
 .claude/
+node_modules/
+src/primocut/webui/dist/
 
 # Artefatos de execução do spike
 data/

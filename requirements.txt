@@ -15,6 +15,14 @@ faster-whisper>=1.0
 chat-downloader>=0.2
 yt-dlp>=2024.1
 
+# --- Fase 1 (web app): fila, banco, API ---
+fastapi>=0.111
+uvicorn[standard]>=0.30
+rq>=1.16
+redis>=5.0
+sqlalchemy>=2.0
+rq-scheduler>=0.13
+
 # CUDA no WSL2 (driver fica no Windows; libs via pip).
 # Descomente se o faster-whisper não achar cuBLAS/cuDNN no ambiente:
 # nvidia-cublas-cu12
