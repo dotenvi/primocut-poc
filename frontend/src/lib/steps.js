@@ -2,10 +2,13 @@
 // text reported by the backend.
 export const STEPS = [
   { key: 'metadata', label: 'Metadata', match: 'metadata' },
-  { key: 'audio', label: 'Audio download', match: 'audio' },
+  // Audio's artifact is ephemeral: its completion is only evidenced later, by
+  // the transcript. `evidenceDeferred` tells computeSteps not to read the
+  // absence of that evidence as "the step produced nothing" (see below).
+  { key: 'audio', label: 'Audio download', match: 'audio', evidenceDeferred: true },
   { key: 'transcription', label: 'Transcription', match: 'transcription' },
   { key: 'chat', label: 'Chat', match: 'chat' },
-  { key: 'topics', label: 'Macro topics', match: 'topics' },
+  { key: 'topics', label: 'Topics', match: 'topics' },
 ]
 
 // Current step summary for a compact progress indicator: the active step's
@@ -71,21 +74,28 @@ export function computeSteps(stage, status, completed = {}, stageHistory = []) {
   )
 
   return STEPS.map((st, i) => {
+    // A step with no artifact of its own resolves to one of two honest,
+    // already-settled states — used both when the pipeline is idle and when it
+    // has moved past a step during a run (e.g. regenerating topics walks past a
+    // chat stage that legitimately has no data).
+    const settled = entered.has(st.key) ? 'empty' : 'skipped'
     let state
     if (completed[st.key]) {
       state = 'done' // confirmed: the artifact exists
-    } else if (active && current >= 0 && i < current) {
-      state = 'done' // already passed this step in the current run
     } else if (active && i === current) {
       state = 'running'
+    } else if (active && current >= 0 && i < current) {
+      // Passed this step in the current run. A step that persists its own
+      // artifact the moment it runs but shows none here produced nothing, so
+      // it's settled — not "done". Only a step whose evidence is deferred
+      // (audio → transcript) may still be legitimately pending its artifact.
+      state = st.evidenceDeferred ? 'done' : settled
     } else if ((status === 'error' || status === 'stopped') && i === current) {
       state = 'failed'
     } else if (active) {
       state = 'pending' // upcoming step in a still-running pipeline
-    } else if (entered.has(st.key)) {
-      state = 'empty' // the stage ran but produced no artifact
     } else {
-      state = 'skipped' // the stage was never entered
+      state = settled
     }
     const durationSec = durations[st.key]
     return { ...st, state, durationSec: durationSec == null ? null : durationSec }
