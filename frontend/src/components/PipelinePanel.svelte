@@ -25,6 +25,8 @@
     <h3>Pipeline stages</h3>
     {#if active}
       <button class="mini danger" on:click={() => dispatch('stop')}>Stop</button>
+    {:else}
+      <button class="mini" on:click={() => dispatch('reprocess')}>Reprocess</button>
     {/if}
   </div>
 

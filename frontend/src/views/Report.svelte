@@ -121,13 +121,6 @@
 {:else}
   <header class="report-head">
     <Player bind:this={playerRef} videoId={data.video.id} />
-    {#if !running}
-      <div class="actions">
-        <a class="btn" href={api.exportUrl(id)} download>Export cuts (JSON)</a>
-        <button class="btn ghost" on:click={reprocess}>Reprocess</button>
-        <button class="btn danger" on:click={remove}>Delete</button>
-      </div>
-    {/if}
   </header>
 
   {#if pending() || data.job}
@@ -139,6 +132,7 @@
       active={running}
       {completed}
       on:stop={stop}
+      on:reprocess={reprocess}
     />
   {/if}
 
@@ -230,5 +224,11 @@
         </div>
       {/if}
     </article>
+  {/if}
+
+  {#if !running}
+    <footer class="report-foot">
+      <button class="mini danger" on:click={remove}>Delete video</button>
+    </footer>
   {/if}
 {/if}

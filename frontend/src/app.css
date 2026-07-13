@@ -88,11 +88,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 .btn.ghost { background: transparent; color: var(--fg); border-color: var(--border); }
 .btn.ghost:hover { border-color: var(--fg); }
 
-.cut { background: transparent; color: var(--muted); border: 1px solid var(--border); }
-.item.marked .cut, .topic.marked .cut {
-  background: var(--ready); color: #101113; border-color: var(--ready);
-}
-
 .btn.danger, .mini.danger { border-color: var(--tally); color: var(--tally); background: transparent; }
 .btn.danger:hover, .mini.danger:hover { background: var(--tally-dim); color: var(--tally); }
 
@@ -186,7 +181,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 .pulse-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--cue); margin-right: 6px; animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-.report-head .actions { margin-top: 14px; display: flex; gap: 10px; }
+.report-foot {
+  display: flex; justify-content: flex-end;
+  margin-top: 32px; padding-top: 18px; border-top: 1px solid var(--border);
+}
 .processing { color: var(--cue); }
 .degraded, .player-blocked {
   background: var(--cue-dim); border: 1px solid var(--cue);
@@ -204,8 +202,6 @@ button:disabled { opacity: 0.5; cursor: default; }
   font-variant-numeric: tabular-nums; letter-spacing: 0;
 }
 .peak-link:hover { text-decoration: underline; text-underline-offset: 3px; }
-
-.item { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 
 .search { width: 100%; margin-bottom: 12px; }
 .transcript {
