@@ -1,4 +1,4 @@
-"""Testes dos downloaders (subprocess / chat-downloader mockados)."""
+"""Tests for the downloaders (mocked subprocess / chat-downloader)."""
 
 from __future__ import annotations
 
@@ -50,12 +50,12 @@ def test_validate_youtube_url_returns_canonical(url):
     "url",
     [
         "",
-        "não é url",
+        "not a url",
         "ftp://youtube.com/watch?v=SDUQEa7FAms",
-        "https://vimeo.com/watch?v=SDUQEa7FAms",  # não é YouTube
-        "https://www.youtube.com/watch\\?v\\=SDUQEa7FAms",  # contra-barras de escape
-        "https://www.youtube.com/watch?v=curto",  # ID inválido (< 11 chars)
-        "https://www.youtube.com/",  # sem vídeo
+        "https://vimeo.com/watch?v=SDUQEa7FAms",  # not YouTube
+        "https://www.youtube.com/watch\\?v\\=SDUQEa7FAms",  # escape backslashes
+        "https://www.youtube.com/watch?v=short",  # invalid ID (< 11 chars)
+        "https://www.youtube.com/",  # no video
     ],
 )
 def test_validate_youtube_url_rejects_bad_input(url):
@@ -70,8 +70,8 @@ def test_fetch_metadata_parses_ytdlp_json(mocker):
     payload = {
         "id": "abc123DEF",
         "webpage_url": "https://youtube.com/watch?v=abc123DEF",
-        "title": "Minha Live",
-        "channel": "Canal Y",
+        "title": "My Live",
+        "channel": "Channel Y",
         "duration": 3600,
     }
     fake = subprocess.CompletedProcess(["yt-dlp"], 0, json.dumps(payload), "")
@@ -79,8 +79,8 @@ def test_fetch_metadata_parses_ytdlp_json(mocker):
 
     video = audio.fetch_metadata("https://youtube.com/watch?v=abc123DEF")
     assert video.id == "abc123DEF"
-    assert video.title == "Minha Live"
-    assert video.channel == "Canal Y"
+    assert video.title == "My Live"
+    assert video.channel == "Channel Y"
     assert video.duration == 3600.0
 
 
@@ -90,13 +90,13 @@ def test_fetch_metadata_retries_transient(mocker):
     payload = {"id": "abc123DEF", "title": "T", "channel": "C", "duration": 10}
     ok = subprocess.CompletedProcess(["yt-dlp"], 0, json.dumps(payload), "")
     run = mocker.patch.object(
-        audio.subprocess, "run", side_effect=[ConnectionError("rede"), ok]
+        audio.subprocess, "run", side_effect=[ConnectionError("network"), ok]
     )
     video = audio.fetch_metadata(
         "https://youtu.be/abc123DEF", Settings(retry_base_delay=0.0)
     )
     assert video.id == "abc123DEF"
-    assert run.call_count == 2  # 1 falha transitória + 1 sucesso
+    assert run.call_count == 2  # 1 transient failure + 1 success
 
 
 def test_download_audio_falls_back_to_next_player_client(mocker, tmp_path):
@@ -107,8 +107,8 @@ def test_download_audio_falls_back_to_next_player_client(mocker, tmp_path):
     def fake_run(cmd, **kwargs):
         cmds.append(cmd)
         if "youtube:player_client=android" in cmd:
-            raise subprocess.CalledProcessError(1, cmd)  # extrator quebrou p/ android
-        if "yt_dlp" in cmd:  # simula o download criando o arquivo comprimido
+            raise subprocess.CalledProcessError(1, cmd)  # extractor broke for android
+        if "yt_dlp" in cmd:  # simulate the download by creating the compressed file
             (tmp_path / "abc123DEF.src.webm").write_bytes(b"x")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -119,9 +119,9 @@ def test_download_audio_falls_back_to_next_player_client(mocker, tmp_path):
     )
     assert out == tmp_path / "abc123DEF.16k.wav"
     joined = [" ".join(map(str, c)) for c in cmds]
-    assert any("player_client=android" in j for j in joined)  # tentou android
-    assert any("player_client=web" in j for j in joined)      # caiu para web
-    assert any(j.startswith("ffmpeg") for j in joined)        # normalizou
+    assert any("player_client=android" in j for j in joined)  # tried android
+    assert any("player_client=web" in j for j in joined)      # fell back to web
+    assert any(j.startswith("ffmpeg") for j in joined)        # normalized
 
 
 def test_download_audio_builds_normalization_command(mocker, tmp_path):
@@ -129,7 +129,7 @@ def test_download_audio_builds_normalization_command(mocker, tmp_path):
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
-        if "yt_dlp" in cmd:  # simula o download criando o arquivo comprimido
+        if "yt_dlp" in cmd:  # simulate the download by creating the compressed file
             (tmp_path / "abc123DEF.src.webm").write_bytes(b"x")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -139,7 +139,7 @@ def test_download_audio_builds_normalization_command(mocker, tmp_path):
     )
 
     assert out == tmp_path / "abc123DEF.16k.wav"
-    # yt-dlp primeiro (via `python -m yt_dlp`), ffmpeg depois com 16kHz mono
+    # yt-dlp first (via `python -m yt_dlp`), then ffmpeg with 16kHz mono
     assert calls[0][:3] == [sys.executable, "-m", "yt_dlp"]
     ffmpeg_cmd = calls[1]
     assert ffmpeg_cmd[0] == "ffmpeg"
@@ -160,9 +160,9 @@ class _FakeDownloader:
 
 def test_download_chat_parses_messages():
     items = [
-        {"time_in_seconds": 5.0, "message": "olá", "author": {"name": "joao"}},
+        {"time_in_seconds": 5.0, "message": "hello", "author": {"name": "joao"}},
         {"time_in_seconds": 12.0, "message": "kkkk", "author": {"name": "ana"}},
-        {"time_in_seconds": None, "message": "superchat sem offset"},  # ignorada
+        {"time_in_seconds": None, "message": "superchat without offset"},  # ignored
     ]
     msgs = chat_dl.download_chat("url", downloader_factory=lambda: _FakeDownloader(items))
     assert msgs is not None
@@ -209,10 +209,10 @@ def test_download_chat_falls_back_to_ytdlp_live_chat():
     )
 
     def boom():
-        raise RuntimeError("chat-downloader indisponível")
+        raise RuntimeError("chat-downloader unavailable")
 
     msgs = chat_dl.download_chat(
-        "url", downloader_factory=boom, live_chat_fetcher=lambda u: [line, "", "lixo{"]
+        "url", downloader_factory=boom, live_chat_fetcher=lambda u: [line, "", "garbage{"]
     )
     assert msgs is not None
     assert len(msgs) == 1

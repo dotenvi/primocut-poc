@@ -1,7 +1,7 @@
-"""Montagem dos dados para a API (relatório navegável, lista, exportação).
+"""Data assembly for the API (navigable report, list, export).
 
-Reusa os modelos/regras da Fase 0: `youtube_url` (&t=), `format_timestamp` e o
-cruzamento com picos do chat (🔥), igual ao relatório Markdown.
+Reuses the Phase 0 models/rules: `youtube_url` (&t=), `format_timestamp` and the
+cross-reference with chat peaks (🔥), just like the Markdown report.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..db import repo
 from ..models import format_timestamp, youtube_url
 
-MARKED = "marcado"
+MARKED = "marked"
 
 
 def list_videos(s: Session) -> list[dict[str, Any]]:
@@ -67,13 +67,6 @@ def build_report(s: Session, video_id: str) -> dict[str, Any] | None:
         "youtube_url": yt(r.start), "fire": fire(r.start, r.end),
     } for r in repo.get_topic_rows(s, video_id)]
 
-    moments = [{
-        "id": r.id, "title": r.title, "reason": r.reason,
-        "start": r.start, "end": r.end, "score": r.score, "status": r.status,
-        "start_hms": format_timestamp(r.start), "end_hms": format_timestamp(r.end),
-        "youtube_url": yt(r.start), "fire": fire(r.start, r.end),
-    } for r in repo.get_moment_rows(s, video_id)]
-
     return {
         "video": {
             "id": v.id, "url": v.url, "title": v.title, "channel": v.channel,
@@ -90,7 +83,6 @@ def build_report(s: Session, video_id: str) -> dict[str, Any] | None:
                       for p in signal.peaks],
         },
         "topics": topics,
-        "moments": moments,
         "transcript": [] if transcript is None else [{
             "index": seg.index, "start": seg.start, "end": seg.end, "text": seg.text,
             "start_hms": format_timestamp(seg.start), "youtube_url": yt(seg.start),
@@ -103,18 +95,16 @@ def export_cuts(s: Session, video_id: str) -> dict[str, Any] | None:
     if v is None:
         return None
 
-    def entry(kind: str, title: str, start: float, end: float, score: float) -> dict:
+    def entry(title: str, start: float, end: float, score: float) -> dict:
         return {
-            "type": kind, "title": title,
+            "title": title,
             "start_seconds": int(start), "end_seconds": int(end),
             "start_hms": format_timestamp(start), "end_hms": format_timestamp(end),
             "youtube_url": youtube_url(video_id, start), "score": score,
         }
 
-    cuts = [entry("topic", r.title, r.start, r.end, r.score)
+    cuts = [entry(r.title, r.start, r.end, r.score)
             for r in repo.get_topic_rows(s, video_id) if r.status == MARKED]
-    cuts += [entry("moment", r.title, r.start, r.end, r.score)
-             for r in repo.get_moment_rows(s, video_id) if r.status == MARKED]
     cuts.sort(key=lambda c: c["start_seconds"])
 
     return {

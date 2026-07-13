@@ -1,39 +1,34 @@
-"""Prompts e schemas de ferramenta para a análise por LLM.
+"""Prompts and tool schemas for the LLM analysis.
 
-Regra de ouro (diretriz técnica #2): o LLM NUNCA inventa timestamps. Ele recebe
-segmentos indexados (`[i] M:SS texto`) e devolve pares de ÍNDICES de segmento.
-O código resolve os índices em segundos. Por isso as ferramentas só aceitam
-`start_index`/`end_index` inteiros — não há campo de tempo.
+Golden rule (technical guideline #2): the LLM NEVER invents timestamps. It
+receives indexed segments (`[i] M:SS text`) and returns pairs of segment
+INDICES. The code resolves the indices into seconds. That is why the tools only
+accept integer `start_index`/`end_index` — there is no time field.
 """
 
 from __future__ import annotations
 
 _ANTI_INVENTION = (
-    "Você recebe a transcrição como linhas numeradas no formato `[i] M:SS texto`, "
-    "onde `i` é o índice do segmento. Para marcar um trecho, retorne SEMPRE os "
-    "índices de segmento inicial e final (start_index/end_index) — NUNCA invente "
-    "tempos nem devolva números de minutos/segundos. Use apenas índices que existem "
-    "na transcrição."
+    "You receive the transcript as numbered lines in the format `[i] M:SS text`, "
+    "where `i` is the segment index. To mark a passage, ALWAYS return the "
+    "start and end segment indices (start_index/end_index) — NEVER invent times "
+    "nor return minute/second numbers. Use only indices that exist in the "
+    "transcript."
 )
 
 TOPICS_SYSTEM = (
-    "Você é um editor de cortes de podcast/live em PT-BR. Sua tarefa é segmentar a "
-    "transcrição em TÓPICOS MACRO (assuntos discutidos), em ordem cronológica. "
-    "Cada tópico tem título curto, resumo de 1 frase e um score de 0 a 1 de "
-    "potencial de virar corte.\n" + _ANTI_INVENTION
-)
-
-MOMENTS_SYSTEM = (
-    "Você é um editor de cortes de podcast/live em PT-BR. Sua tarefa é a DETECÇÃO "
-    "FINA de momentos específicos e autocontidos que são fortes candidatos a corte "
-    "(piada, tirada, revelação, pico de emoção), com início e fim PRECISOS. "
-    "Cada momento tem título, o motivo de ser um bom corte e um score de 0 a 1.\n"
-    + _ANTI_INVENTION
+    "You are a podcast/live clip editor working in PT-BR. Your task is to segment "
+    "the transcript into MACRO TOPICS (subjects discussed), in chronological "
+    "order. Create one topic per genuinely distinct subject — do NOT aim for any "
+    "particular number of topics: a short segment may have a few, a long one many. "
+    "Do not merge unrelated subjects to hit a target, nor split a single subject "
+    "into fragments. Each topic has a short title, a 1-sentence summary and a "
+    "score from 0 to 1 of its potential to become a clip.\n" + _ANTI_INVENTION
 )
 
 TOPICS_TOOL = {
     "name": "record_topics",
-    "description": "Registra os tópicos macro identificados na janela.",
+    "description": "Records the macro topics identified in the window.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -53,30 +48,5 @@ TOPICS_TOOL = {
             }
         },
         "required": ["topics"],
-    },
-}
-
-MOMENTS_TOOL = {
-    "name": "record_moments",
-    "description": "Registra os momentos candidatos a corte identificados na janela.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "moments": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "title": {"type": "string"},
-                        "reason": {"type": "string"},
-                        "start_index": {"type": "integer"},
-                        "end_index": {"type": "integer"},
-                        "score": {"type": "number"},
-                    },
-                    "required": ["title", "reason", "start_index", "end_index", "score"],
-                },
-            }
-        },
-        "required": ["moments"],
     },
 }

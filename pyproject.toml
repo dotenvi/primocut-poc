@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "primocut"
 version = "0.0.0"
-description = "PRIMOCUT — Fase 0 (Spike CLI): URL de live -> áudio -> transcrição -> chat -> tópicos em Markdown"
+description = "PRIMOCUT: live URL -> audio -> transcription -> chat -> topics in Markdown"
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [

@@ -1,4 +1,4 @@
-"""Testes da detecção de sinais do chat (densidade, risadas, picos por z-score)."""
+"""Tests for chat signal detection (density, laughs, z-score peaks)."""
 
 from __future__ import annotations
 
@@ -8,16 +8,16 @@ from primocut.models import ChatMessage
 
 def test_is_laugh_variants():
     assert is_laugh("kkkkk")
-    assert is_laugh("KKKK isso")
+    assert is_laugh("KKKK yes")
     assert is_laugh("hahaha")
     assert is_laugh("aiaiai rsrsrs")
     assert not is_laugh("ok")
-    assert not is_laugh("falando sério agora")
+    assert not is_laugh("talking seriously now")
 
 
 def test_count_emotes_counts_emoji():
     assert count_emotes("boa 😂😂") == 2
-    assert count_emotes("sem emote aqui") == 0
+    assert count_emotes("no emote here") == 0
 
 
 def test_buckets_by_minute():
@@ -35,7 +35,7 @@ def test_buckets_by_minute():
 def test_laughs_and_emotes_aggregated_per_minute():
     msgs = [
         ChatMessage(offset_seconds=5, text="kkkk"),
-        ChatMessage(offset_seconds=6, text="sério 😂"),
+        ChatMessage(offset_seconds=6, text="serious 😂"),
         ChatMessage(offset_seconds=7, text="normal"),
     ]
     sig = compute_chat_signal("vid", msgs)
@@ -46,11 +46,11 @@ def test_laughs_and_emotes_aggregated_per_minute():
 
 def test_peak_detected_on_spike():
     msgs = []
-    # 10 minutos com 2 msgs cada
+    # 10 minutes with 2 msgs each
     for minute in range(10):
         for _ in range(2):
-            msgs.append(ChatMessage(offset_seconds=minute * 60 + 1, text="oi"))
-    # minuto 10 com um pico de 50 msgs
+            msgs.append(ChatMessage(offset_seconds=minute * 60 + 1, text="hi"))
+    # minute 10 with a spike of 50 msgs
     for _ in range(50):
         msgs.append(ChatMessage(offset_seconds=10 * 60 + 1, text="kkkk"))
 
@@ -63,7 +63,7 @@ def test_peak_detected_on_spike():
 
 
 def test_no_peaks_when_flat():
-    msgs = [ChatMessage(offset_seconds=m * 60 + 1, text="oi") for m in range(10)]
+    msgs = [ChatMessage(offset_seconds=m * 60 + 1, text="hi") for m in range(10)]
     sig = compute_chat_signal("vid", msgs, threshold=2.0)
     assert sig.peaks == []
 

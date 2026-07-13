@@ -1,4 +1,4 @@
-"""Testes da API FastAPI (TestClient, DB temporário, fila fake, worker inline)."""
+"""Tests for the FastAPI API (TestClient, temporary DB, fake queue, inline worker)."""
 
 from __future__ import annotations
 
@@ -46,9 +46,7 @@ class _FakeEngine:
 
 class _FakeLLM:
     def select(self, *, system, user, tool, tool_name):
-        if tool_name == "record_topics":
-            return {"topics": [{"title": "A", "summary": "s", "start_index": 0, "end_index": 1, "score": 0.7}]}
-        return {"moments": [{"title": "P", "reason": "r", "start_index": 2, "end_index": 2, "score": 0.9}]}
+        return {"topics": [{"title": "A", "summary": "s", "start_index": 0, "end_index": 1, "score": 0.7}]}
 
 
 def _db(tmp_path) -> Database:
@@ -59,10 +57,10 @@ def _db(tmp_path) -> Database:
 
 def _client(db, queue=None) -> TestClient:
     app = create_app()
-    data_dir = Path(db.engine.url.database).parent  # mesmo tmp do banco
+    data_dir = Path(db.engine.url.database).parent  # same tmp as the database
     app.dependency_overrides[get_db] = lambda: db
     app.dependency_overrides[get_queue_dep] = lambda: queue or _FakeQueue()
-    app.dependency_overrides[get_stopper] = lambda: (lambda *a, **k: None)  # no-op sem Redis
+    app.dependency_overrides[get_stopper] = lambda: (lambda *a, **k: None)  # no-op without Redis
     app.dependency_overrides[get_settings_dep] = lambda: Settings(data_dir=data_dir)
     return TestClient(app)
 
@@ -131,7 +129,7 @@ def test_report_structure_and_links(tmp_path):
     assert rep["job"]["status"] == "finished" and rep["job"]["progress"] == 100
     assert rep["topics"][0]["title"] == "A"
     assert rep["topics"][0]["youtube_url"].endswith("&t=0")
-    assert rep["moments"][0]["title"] == "P"
+    assert "moments" not in rep
     assert len(rep["transcript"]) == 3
     assert rep["transcript"][0]["youtube_url"].startswith("https://youtube.com/watch?v=v1")
 
@@ -139,7 +137,7 @@ def test_report_structure_and_links(tmp_path):
 def test_report_fire_flag_from_chat_peak(tmp_path):
     db = _db(tmp_path)
     _seed_done(db, tmp_path)
-    with db.session() as s:  # pico em ts=5 cai dentro do tópico A [0,20]
+    with db.session() as s:  # peak at ts=5 falls inside topic A [0,20]
         repo.save_chat_signal(s, ChatSignal(video_id="v1", per_minute=[],
                                             peaks=[Peak(ts=5.0, intensity=50.0, z=3.0)]))
     rep = _client(db).get("/api/videos/v1/report").json()
@@ -156,11 +154,12 @@ def test_mark_topic_and_export(tmp_path):
     with db.session() as s:
         tid = repo.get_topic_rows(s, "v1")[0].id
 
-    r = client.post(f"/api/videos/v1/topics/{tid}", json={"status": "marcado"})
+    r = client.post(f"/api/videos/v1/topics/{tid}", json={"status": "marked"})
     assert r.status_code == 200
 
     exp = client.get("/api/videos/v1/export?format=json").json()
-    assert exp["cuts"] and exp["cuts"][0]["type"] == "topic"
+    assert exp["cuts"] and exp["cuts"][0]["title"] == "A"
+    assert "type" not in exp["cuts"][0]
     assert exp["cuts"][0]["youtube_url"].endswith("&t=0")
     assert "start_hms" in exp["cuts"][0]
 
@@ -170,7 +169,7 @@ def test_mark_invalid_status_and_missing_topic(tmp_path):
     _seed_done(db, tmp_path)
     client = _client(db)
     assert client.post("/api/videos/v1/topics/1", json={"status": "xpto"}).status_code == 400
-    assert client.post("/api/videos/v1/topics/9999", json={"status": "marcado"}).status_code == 404
+    assert client.post("/api/videos/v1/topics/9999", json={"status": "marked"}).status_code == 404
 
 
 def test_export_empty_when_nothing_marked(tmp_path):

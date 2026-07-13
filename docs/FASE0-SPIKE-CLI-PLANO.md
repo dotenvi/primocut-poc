@@ -1,113 +1,117 @@
-# PRIMOCUT — Fase 0 (Spike CLI) — Plano de Implementação
+# PRIMOCUT — Phase 0 (CLI spike) — Implementation Plan
 
-> Documento de planejamento da Fase 0 descrita no roadmap de [`PRIMOCUT.md`](./PRIMOCUT.md).
-> Fonte de verdade do projeto continua sendo `PRIMOCUT.md`; este arquivo detalha **como**
-> a Fase 0 (Spike CLI) será implementada.
+> Planning document for Phase 0 described in the [`PRIMOCUT.md`](./PRIMOCUT.md) roadmap.
+> The project source of truth is still `PRIMOCUT.md`; this file details **how**
+> Phase 0 (the CLI spike) was implemented.
 
-## Contexto
+> **Historical note (pre-Phase 2):** this document describes Phase 0 as originally planned, which
+> included a second, fine-grained "cut moments" analysis pass and a 10-20 topic cap. Both were
+> later **removed**: the analysis now has a single macro-topics pass with no numeric cap. The
+> `analysis/moments.py` module and the `CutMoment` model no longer exist. Read the moment/cap
+> mentions below as history.
 
-A Fase 0 é um **spike de linha de comando**: dada a URL de uma live do YouTube, produzir um
-relatório em Markdown com os tópicos discutidos, seguindo o pipeline
-**áudio → chat replay → transcrição → análise por LLM**.
+## Context
 
-Objetivos do spike (do roadmap): validar **GPU no WSL2**, comparar a qualidade de segmentação
-(**tópicos macro** vs. **detecção fina de momentos**) e validar a **detecção de picos do chat**.
+Phase 0 is a **command-line spike**: given the URL of a YouTube live, produce a Markdown report
+with the topics discussed, following the pipeline
+**audio → chat replay → transcription → LLM analysis**.
 
-O código já nasce **modular** para evoluir à Fase 1 (fila + banco + web), com fronteiras limpas
-entre módulos e uma abstração `TranscriptionEngine`.
+Spike goals (from the roadmap): validate the **GPU on WSL2**, compare the segmentation quality
+(**macro topics** vs. **fine-grained moment detection**) and validate **chat peak detection**.
 
-### Recon do ambiente (executado em 2026-07-12)
-- GPU RTX 3070 Ti (8 GB), driver 595.97, CUDA 13.2 — **visível** via `nvidia-smi`. ✅
-- **Faltando** no host: `ffmpeg`, `yt-dlp`, e `ANTHROPIC_API_KEY` não setada. → É exatamente o que
-  o comando `doctor` deve detectar; construiremos e demonstraremos o `doctor` contra este ambiente
-  "não-saudável".
-- Python 3.13.5 disponível.
+The code is **modular** from the start so it can evolve into Phase 1 (queue + database + web), with
+clean boundaries between modules and a `TranscriptionEngine` abstraction.
 
-### Decisões confirmadas
-- **Ferramentas nativas do Python** (sem uv por ora, conforme spec §Stack): `python -m venv .venv`
-  + `pip` + `requirements.txt`. Um `pyproject.toml` mínimo (setuptools) só registra o entrypoint
-  `primocut` via `pip install -e .`. (uv fica para quando for autorizado.)
-- **Duas passagens de LLM independentes** (macro topics / fine-grained moments) — melhor comparação
-  da qualidade de segmentação.
-- Modelo de análise default: **`claude-sonnet-5`** (sobrescrevível por env).
-- `doctor` **reporta + imprime comandos de correção** (sem auto-install).
+### Environment recon (run on 2026-07-12)
+- RTX 3070 Ti GPU (8 GB), driver 595.97, CUDA 13.2 — **visible** via `nvidia-smi`. ✅
+- **Missing** on the host: `ffmpeg`, `yt-dlp`, and `ANTHROPIC_API_KEY` not set. → This is exactly
+  what the `doctor` command must detect; we build and demonstrate `doctor` against this
+  "unhealthy" environment.
+- Python 3.13.5 available.
+
+### Confirmed decisions
+- **Native Python tooling** (no uv for now, per spec §Stack): `python -m venv .venv`
+  + `pip` + `requirements.txt`. A minimal `pyproject.toml` (setuptools) only registers the
+  `primocut` entry point via `pip install -e .`. (uv is deferred until authorized.)
+- **Two independent LLM passes** (macro topics / fine-grained moments) — better comparison of the
+  segmentation quality. *(Historical: the second pass was later removed.)*
+- Default analysis model: **`claude-sonnet-5`** (overridable via env).
+- `doctor` **reports + prints fix commands** (no auto-install).
 
 ---
 
-## Estrutura de diretórios
+## Directory structure
 
 ```
 primocut/
-├── pyproject.toml               # setuptools mínimo: metadados + entrypoint `primocut` (pip install -e .)
-├── requirements.txt             # deps de runtime (pip)
+├── pyproject.toml               # minimal setuptools: metadata + `primocut` entry point (pip install -e .)
+├── requirements.txt             # runtime deps (pip)
 ├── requirements-dev.txt         # pytest, pytest-mock
-├── README.md                    # como rodar + testar cada módulo
+├── README.md                    # how to run + test each module
 ├── .env.example                 # ANTHROPIC_API_KEY=...
 ├── .gitignore
 ├── src/primocut/
 │   ├── __init__.py
-│   ├── config.py                # Settings (pydantic-settings): paths, modelo, janela, retenção
-│   ├── logging_conf.py          # logging estruturado + progresso de etapas
-│   ├── models.py                # modelos pydantic (Video, Transcript, Segment, ChatSignal, Topic, CutMoment, Report)
+│   ├── config.py                # Settings (pydantic-settings): paths, model, window, retention
+│   ├── logging_conf.py          # structured logging + stage progress
+│   ├── models.py                # pydantic models (Video, Transcript, Segment, ChatSignal, Topic, Report)
 │   ├── cli.py                   # Typer app: `doctor`, `run`
-│   ├── doctor.py                # diagnóstico do ambiente (CUDA/GPU, ffmpeg, yt-dlp, chave API)
-│   ├── pipeline.py              # orquestra as etapas, emite progresso
+│   ├── doctor.py                # environment diagnostics (CUDA/GPU, ffmpeg, yt-dlp, API key)
+│   ├── pipeline.py              # orchestrates the stages, emits progress
 │   ├── download/
 │   │   ├── __init__.py
-│   │   └── audio.py             # yt-dlp: metadados + áudio; FFmpeg → 16kHz mono wav
+│   │   └── audio.py             # yt-dlp: metadata + audio; FFmpeg → 16kHz mono wav
 │   ├── chat/
 │   │   ├── __init__.py
-│   │   ├── downloader.py        # chat-downloader (fallback yt-dlp live_chat); ausência = None
-│   │   └── signals.py           # densidade msgs/min, z-score de picos, risadas/emotes
+│   │   ├── downloader.py        # chat-downloader (yt-dlp live_chat fallback); absence = None
+│   │   └── signals.py           # msgs/min density, z-score peaks, laughs/emotes
 │   ├── transcription/
 │   │   ├── __init__.py
-│   │   ├── engine.py            # interface TranscriptionEngine (ABC/Protocol)
-│   │   └── faster_whisper_engine.py  # impl. large-v3-turbo GPU
+│   │   ├── engine.py            # TranscriptionEngine interface (ABC/Protocol)
+│   │   └── faster_whisper_engine.py  # large-v3-turbo GPU impl.
 │   ├── analysis/
 │   │   ├── __init__.py
-│   │   ├── windowing.py         # janelas com sobreposição sobre segmentos
-│   │   ├── llm.py               # client Anthropic + chamada estruturada (tool use / JSON)
-│   │   ├── prompts.py           # prompts macro e fino (seleção de segmentos, nunca inventar ts)
-│   │   ├── topics.py            # passagem macro (10–20 tópicos) + consolidação entre janelas
-│   │   └── moments.py           # passagem fina (candidatos a corte, início/fim precisos)
+│   │   ├── windowing.py         # overlapping windows over segments
+│   │   ├── llm.py               # Anthropic client + structured call (tool use / JSON)
+│   │   ├── prompts.py           # topic prompt (segment selection, never invent ts)
+│   │   └── topics.py            # macro pass + consolidation across windows
 │   └── report/
 │       ├── __init__.py
-│       └── markdown.py          # renderiza o relatório .md
+│       └── markdown.py          # renders the .md report
 └── tests/
-    ├── conftest.py              # fixtures: transcript sintético, chat sintético
-    ├── fixtures/                # transcript.json, chat.jsonl de exemplo
+    ├── conftest.py              # fixtures: synthetic transcript, synthetic chat
+    ├── fixtures/                # example transcript.json, chat.jsonl
     ├── test_models.py
     ├── test_doctor.py
     ├── test_chat_signals.py
     ├── test_windowing.py
-    ├── test_analysis_selection.py   # garante que ts vêm dos segmentos (nunca inventados)
+    ├── test_analysis_selection.py   # ensures ts come from segments (never invented)
     ├── test_report_markdown.py
-    └── test_transcription_engine.py # com engine fake, valida a interface
+    └── test_transcription_engine.py # with a fake engine, validates the interface
 ```
 
-**Princípio anti-invenção de timestamps** (diretriz técnica #2): o LLM recebe segmentos
-**indexados** (`[i] mm:ss texto`) e retorna **índices de segmento** (`start_index`/`end_index`),
-não números de tempo. O código resolve os índices → segundos a partir da transcrição. Assim é
-*impossível* o LLM inventar timestamps.
+**Timestamp anti-invention principle** (technical guideline #2): the LLM receives **indexed**
+segments (`[i] mm:ss text`) and returns **segment indices** (`start_index`/`end_index`),
+not time numbers. The code resolves the indices → seconds from the transcript. This makes it
+*impossible* for the LLM to invent timestamps.
 
 ---
 
-## Modelos de dados (pydantic, alinhados à spec §"Modelo de dados")
+## Data models (pydantic, aligned with the spec §"Data model")
 
 - `Segment{index:int, start:float, end:float, text:str}`
 - `Transcript{video_id, language, model, segments:list[Segment]}` + helpers `duration`, `window()`
-- `Video{id, url, title, channel, duration, status}` (enum de status da spec)
-- `ChatMessage{offset_seconds:float, author, text}` e
+- `Video{id, url, title, channel, duration, status}` (status enum from the spec)
+- `ChatMessage{offset_seconds:float, author, text}` and
   `ChatSignal{video_id, per_minute:list[MinuteBucket{minute, msgs, laughs, emotes}], peaks:list[Peak{ts, intensity, z}]}`
-- `Topic{title, summary, start, end, score, status}` (macro)
-- `CutMoment{title, reason, start, end, score}` (fino) — `start/end` sempre resolvidos de segmentos
-- `Report{video, transcript_meta, chat_signal|None, topics, moments}` → método `youtube_url(ts)`
+- `Topic{title, summary, start, end, score, status}` (macro) — `start/end` always resolved from segments
+- `Report{video, transcript_meta, chat_signal|None, topics}` → `youtube_url(ts)` method
 
 `youtube_url(ts)` → `https://youtube.com/watch?v={id}&t={int(ts)}`.
 
 ---
 
-## Interface TranscriptionEngine (diretriz técnica #1)
+## TranscriptionEngine interface (technical guideline #1)
 
 ```python
 class TranscriptionEngine(Protocol):
@@ -116,90 +120,87 @@ class TranscriptionEngine(Protocol):
     def name(self) -> str: ...
 ```
 - `FasterWhisperEngine`: `large-v3-turbo`, `device="cuda"`, `compute_type="float16"`
-  (fallback `int8_float16` se a VRAM de 8 GB apertar), `vad_filter=True`. Constrói `Segment`
-  com índice sequencial.
-- Fase 2 (WhisperX) pluga aqui sem tocar no resto do sistema.
+  (fallback `int8_float16` if the 8 GB of VRAM get tight), `vad_filter=True`. Builds `Segment`
+  with a sequential index.
+- Phase 2 (WhisperX) plugs in here without touching the rest of the system.
 
 ---
 
-## Análise por LLM (diretrizes técnicas #2 e #3) — DUAS passagens independentes
+## LLM analysis (technical guidelines #2 and #3)
 
-1. **Windowing** (`windowing.py`): particiona `segments` em janelas por duração-alvo
-   (default ~20 min de áudio / ~8k tokens) com **sobreposição** (default ~60 s). Cada janela
-   mantém os índices globais de segmento.
-2. **Passagem MACRO** (`topics.py`): por janela, o LLM seleciona intervalos de segmentos → tópicos;
-   depois **consolida** entre janelas (deduplica os que cruzam a sobreposição, funde adjacentes),
-   alvo **10–20 tópicos** na live inteira.
-3. **Passagem FINA** (`moments.py`): por janela, o LLM marca **momentos candidatos a corte** com
-   `start_index/end_index` precisos + motivo + score; consolida sem forçar o teto de 10–20.
-4. **LLM client** (`llm.py`): Anthropic SDK, **tool use / structured output** para forçar o schema
-   (retornar índices). Modelo default `claude-sonnet-5` (via `config.py`, sobrescrevível por env).
-   Chave lida de `ANTHROPIC_API_KEY`. Nos testes, o client é **injetável/mockado** (sem rede).
-
----
-
-## Chat (diretriz técnica #4) — sinal opcional
-
-- `downloader.py`: tenta `chat-downloader`; se não houver replay → retorna `None` e o pipeline
-  segue sem ele.
-- `signals.py`: buckets por minuto (msgs, risadas via regex `k{4,}`/"haha", emotes), **z-score**
-  sobre msgs/min → `peaks` (z ≥ threshold, default 2.0). Puro/determinístico → testável sem rede.
-- No relatório: tabela/sparkline textual de atividade + picos **cruzados** com tópicos/momentos
-  (marca tópicos que coincidem com um pico).
+1. **Windowing** (`windowing.py`): partitions `segments` into windows by target duration
+   (default ~20 min of audio / ~8k tokens) with **overlap** (default ~60 s). Each window keeps the
+   global segment indices.
+2. **Macro pass** (`topics.py`): per window, the LLM selects segment ranges → topics; then
+   **consolidates** across windows (deduplicates the ones crossing the overlap, merges neighbours).
+   *(Historical: the original plan capped this at 10-20 topics and added a separate fine-grained
+   "moments" pass in `moments.py`; both were later removed.)*
+3. **LLM client** (`llm.py`): Anthropic SDK, **tool use / structured output** to force the schema
+   (return indices). Default model `claude-sonnet-5` (via `config.py`, overridable via env).
+   Key read from `ANTHROPIC_API_KEY`. In tests the client is **injectable/mocked** (no network).
 
 ---
 
-## Relatório Markdown
+## Chat (technical guideline #4) — optional signal
 
-`markdown.py` gera, nesta ordem:
-1. **Metadados**: título, canal, URL, duração, modelo de transcrição, data.
-2. **Atividade do chat**: tabela por minuto + sparkline ASCII (blocos `▁▂▃▅▇`) + lista de picos;
-   ou aviso "sem replay de chat" quando ausente.
-3. **Tópicos macro** (10–20): título · resumo · [início–fim] · score, com **link clicável**
-   `https://youtube.com/watch?v=ID&t=SEGUNDOS`.
-4. **Momentos candidatos a corte** (fino): mesmo formato, timestamps precisos.
-
-Tópicos/momentos coincidentes com picos de chat recebem um marcador (🔥).
+- `downloader.py`: tries `chat-downloader`; if there is no replay → returns `None` and the pipeline
+  continues without it.
+- `signals.py`: per-minute buckets (msgs, laughs via regex `k{4,}`/"haha", emotes), **z-score**
+  over msgs/min → `peaks` (z ≥ threshold, default 2.0). Pure/deterministic → testable without network.
+- In the report: a textual activity table/sparkline + peaks **cross-referenced** with topics
+  (marks topics that coincide with a peak).
 
 ---
 
-## Ordem de implementação (TDD, teste-primeiro, módulo por módulo)
+## Markdown report
 
-Cada etapa: escrever teste(s) → implementar → mostrar o comando de teste isolado.
+`markdown.py` produces, in this order:
+1. **Metadata**: title, channel, URL, duration, transcription model, date.
+2. **Chat activity**: per-minute table + ASCII sparkline (blocks `▁▂▃▅▇`) + peak list;
+   or a "no chat replay" notice when absent.
+3. **Macro topics**: title · summary · [start–end] · score, with a **clickable link**
+   `https://youtube.com/watch?v=ID&t=SECONDS`.
+
+Topics that coincide with chat peaks get a marker (🔥).
+
+---
+
+## Implementation order (TDD, test-first, module by module)
+
+Each step: write test(s) → implement → show the isolated test command.
 
 0. **Scaffold**: `python -m venv .venv` → `pip install -r requirements.txt -r requirements-dev.txt`
-   → `pip install -e .`. `pyproject.toml` (setuptools) só p/ metadados + entrypoint `primocut`.
+   → `pip install -e .`. `pyproject.toml` (setuptools) only for metadata + the `primocut` entry point.
    logging, `config.py`.
-1. **`doctor` PRIMEIRO** (`test_doctor.py` com checagens mockadas): valida GPU/CUDA, ffmpeg,
-   yt-dlp, chave. Demo real: `primocut doctor` (venv ativa) → mostra os itens faltando + comandos
-   de correção.
-2. **`models.py`** (`test_models.py`): validação pydantic + `youtube_url`, `window()`.
-3. **`chat/signals.py`** (`test_chat_signals.py`): z-score/picos/risadas com chat sintético.
-4. **`transcription/engine.py`** + fake engine (`test_transcription_engine.py`): contrato da interface.
-5. **`analysis/windowing.py`** (`test_windowing.py`): janelas + sobreposição + índices globais.
-6. **`analysis` (topics/moments/llm)** (`test_analysis_selection.py`): com **LLM fake** que devolve
-   índices → prova que timestamps saem dos segmentos (nunca inventados) + consolidação.
-7. **`report/markdown.py`** (`test_report_markdown.py`): snapshot do `.md` com links corretos.
-8. **`download/audio.py`** + **`chat/downloader.py`**: wrappers finos de yt-dlp/chat-downloader
-   (testes leves com subprocess mockado; validação real depende de ffmpeg/yt-dlp instalados).
-9. **`pipeline.py`** + `run` no CLI: orquestra tudo com progresso; end-to-end.
+1. **`doctor` FIRST** (`test_doctor.py` with mocked checks): validates GPU/CUDA, ffmpeg,
+   yt-dlp, key. Real demo: `primocut doctor` (venv active) → shows the missing items + fix commands.
+2. **`models.py`** (`test_models.py`): pydantic validation + `youtube_url`, `window()`.
+3. **`chat/signals.py`** (`test_chat_signals.py`): z-score/peaks/laughs with synthetic chat.
+4. **`transcription/engine.py`** + fake engine (`test_transcription_engine.py`): interface contract.
+5. **`analysis/windowing.py`** (`test_windowing.py`): windows + overlap + global indices.
+6. **`analysis` (topics/llm)** (`test_analysis_selection.py`): with a **fake LLM** that returns
+   indices → proves timestamps come from segments (never invented) + consolidation.
+7. **`report/markdown.py`** (`test_report_markdown.py`): snapshot of the `.md` with correct links.
+8. **`download/audio.py`** + **`chat/downloader.py`**: thin yt-dlp/chat-downloader wrappers
+   (light tests with mocked subprocess; real validation depends on ffmpeg/yt-dlp being installed).
+9. **`pipeline.py`** + `run` in the CLI: orchestrates everything with progress; end-to-end.
 
-### Dependências (`requirements.txt`)
+### Dependencies (`requirements.txt`)
 `typer`, `pydantic`, `pydantic-settings`, `anthropic`, `faster-whisper`, `chat-downloader`,
-`yt-dlp`, `rich` (logging/progresso), `nvidia-cublas-cu12`, `nvidia-cudnn-cu12` (CUDA no WSL).
+`yt-dlp`, `rich` (logging/progress), `nvidia-cublas-cu12`, `nvidia-cudnn-cu12` (CUDA on WSL).
 `requirements-dev.txt`: `pytest`, `pytest-mock`.
 
 ---
 
-## Verificação (como testar)
+## Verification (how to test)
 
-Comandos assumem a venv ativa (`source .venv/bin/activate`).
-- **Por módulo (isolado, sem rede/GPU)**: `pytest tests/test_<mod>.py -v`. Toda a lógica pura
-  (signals, windowing, seleção de ts, report) roda sem GPU e sem API.
-- **doctor (real)**: `primocut doctor` — deve listar ffmpeg/yt-dlp/chave faltando com o fix.
-- **Transcrição (real, GPU)**: após instalar deps, transcrever um clipe curto e conferir `device=cuda`.
-- **End-to-end**: `primocut run "<url>" -o report.md` com uma live curta; abrir `report.md`
-  e clicar nos timestamps.
+Commands assume the venv is active (`source .venv/bin/activate`).
+- **Per module (isolated, no network/GPU)**: `pytest tests/test_<mod>.py -v`. All the pure logic
+  (signals, windowing, ts selection, report) runs without a GPU and without the API.
+- **doctor (real)**: `primocut doctor` — should list missing ffmpeg/yt-dlp/key with the fix.
+- **Transcription (real, GPU)**: after installing deps, transcribe a short clip and check `device=cuda`.
+- **End-to-end**: `primocut run "<url>" -o report.md` with a short live; open `report.md`
+  and click the timestamps.
 
-## Fora de escopo (Fase 0)
-Fila/Redis, SQLite, FastAPI, web UI, corte/render de clipes, upload — ficam para Fases 1+.
+## Out of scope (Phase 0)
+Queue/Redis, SQLite, FastAPI, web UI, clip cutting/rendering, upload — deferred to Phase 1+.

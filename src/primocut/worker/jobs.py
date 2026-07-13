@@ -1,8 +1,8 @@
-"""Job RQ: processa um vídeo executando o pipeline (com persistência e progresso).
+"""RQ job: process a video by running the pipeline (with persistence and progress).
 
-1 job por vídeo. Reusa `run_stages` (mesma lógica/resiliência do CLI) com
-`DbStore` (cache paga-uma-vez no banco) e `DbReporter` (status/progresso vivos).
-Reenfileirar é idempotente: etapas com artefato já no banco são puladas.
+1 job per video. Reuses `run_stages` (same logic/resilience as the CLI) with
+`DbStore` (pay-once cache in the database) and `DbReporter` (live status/progress).
+Re-enqueueing is idempotent: stages whose artifact is already in the database are skipped.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def process_video(
     with database.session() as s:
         video = repo.get_video(s, video_id)
         if video is None:
-            raise ValueError(f"Vídeo {video_id!r} não encontrado no banco.")
+            raise ValueError(f"Video {video_id!r} not found in the database.")
         url = video.url
         job = repo.latest_job(s, video_id) or repo.create_job(s, video_id)
         job_id = job.id
@@ -59,7 +59,7 @@ def process_video(
 
         llm = get_llm(settings)
 
-    if gpu_lock is None:  # serializa a GPU entre workers (1 transcrição por vez)
+    if gpu_lock is None:  # serialize the GPU across workers (1 transcription at a time)
         from ..gpu import redis_gpu_lock
 
         gpu_lock = redis_gpu_lock(settings)
@@ -73,21 +73,20 @@ def process_video(
             engine=engine, llm=llm, gpu_lock=gpu_lock, metadata_fn=metadata_fn,
             download_audio_fn=download_audio_fn, download_chat_fn=download_chat_fn,
         )
-    except PipelineError as exc:  # etapa essencial falhou → erro
-        logger.error("Job %s falhou: %s", job_id, exc)
+    except PipelineError as exc:  # an essential stage failed → error
+        logger.error("Job %s failed: %s", job_id, exc)
         with database.session() as s:
             repo.update_job(s, job_id, status="failed", error=str(exc))
             repo.set_video_status(s, video_id, VideoStatus.ERROR)
         raise
 
     with database.session() as s:
-        repo.update_job(s, job_id, status="finished", stage="Concluído",
+        repo.update_job(s, job_id, status="finished", stage="Done",
                         progress=100, warnings=result.warnings)
         repo.set_video_status(s, video_id, VideoStatus.DONE)
 
     return {
         "video_id": video_id,
         "topics": len(result.topics),
-        "moments": len(result.moments),
         "warnings": result.warnings,
     }

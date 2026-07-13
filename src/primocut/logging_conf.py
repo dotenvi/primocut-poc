@@ -1,4 +1,4 @@
-"""Logging estruturado + helper de progresso das etapas do pipeline."""
+"""Structured logging + pipeline stage progress helper."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ _CONFIGURED = False
 
 
 def setup_logging(level: int = logging.INFO) -> None:
-    """Configura logging com RichHandler (idempotente)."""
+    """Configure logging with RichHandler (idempotent)."""
     global _CONFIGURED
     if _CONFIGURED:
         return
@@ -32,13 +32,13 @@ def get_logger(name: str) -> logging.Logger:
 
 @contextmanager
 def step(logger: logging.Logger, name: str) -> Iterator[None]:
-    """Marca início/fim de uma etapa do pipeline com duração."""
+    """Mark the start/end of a pipeline stage with its duration."""
     logger.info("▶  %s", name)
     start = perf_counter()
     try:
         yield
     except Exception:
-        logger.exception("✖  %s (falhou)", name)
+        logger.exception("✖  %s (failed)", name)
         raise
     else:
         logger.info("✔  %s (%.1fs)", name, perf_counter() - start)

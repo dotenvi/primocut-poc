@@ -1,11 +1,10 @@
-"""Testes dos modelos pydantic e helpers de timestamp."""
+"""Tests for the pydantic models and timestamp helpers."""
 
 from __future__ import annotations
 
 import pytest
 
 from primocut.models import (
-    CutMoment,
     Report,
     Segment,
     Topic,
@@ -23,9 +22,9 @@ def _transcript() -> Transcript:
         language="pt",
         model="large-v3-turbo",
         segments=[
-            Segment(index=0, start=0.0, end=5.0, text="olá pessoal"),
-            Segment(index=1, start=5.0, end=12.0, text="hoje vamos falar de python"),
-            Segment(index=2, start=12.0, end=20.5, text="e também de café"),
+            Segment(index=0, start=0.0, end=5.0, text="hello everyone"),
+            Segment(index=1, start=5.0, end=12.0, text="today we'll talk about python"),
+            Segment(index=2, start=12.0, end=20.5, text="and also about coffee"),
         ],
     )
 
@@ -73,7 +72,7 @@ def test_video_status_enum():
 
 
 def test_topic_defaults_to_new_status():
-    t = Topic(title="Python", summary="fala de python", start=5.0, end=12.0, score=0.8)
+    t = Topic(title="Python", summary="talks about python", start=5.0, end=12.0, score=0.8)
     assert t.status == TopicStatus.NEW
 
 
@@ -84,7 +83,6 @@ def test_report_youtube_url_uses_video_id():
         transcript_model="large-v3-turbo",
         chat_signal=None,
         topics=[Topic(title="Python", summary="s", start=5.0, end=12.0, score=0.8)],
-        moments=[CutMoment(title="corte", reason="engraçado", start=12.0, end=20.5, score=0.9)],
     )
     assert report.youtube_url(5.0) == "https://youtube.com/watch?v=abc123&t=5"
     assert report.chat_signal is None

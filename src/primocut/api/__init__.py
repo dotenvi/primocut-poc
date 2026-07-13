@@ -1,4 +1,4 @@
-"""API HTTP (FastAPI) do PRIMOCUT."""
+"""PRIMOCUT HTTP API (FastAPI)."""
 
 from .app import create_app
 

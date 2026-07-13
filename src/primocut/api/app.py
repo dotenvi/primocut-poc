@@ -1,4 +1,4 @@
-"""Aplicação FastAPI: submissão, status, relatório, marcação e exportação."""
+"""FastAPI application: submission, status, report, marking and export."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from ..db import get_database
 from ..db import repo
 from . import service
 
-_VALID_STATUS = {"novo", "marcado", "descartado"}
+_VALID_STATUS = {"new", "marked", "discarded"}
 
 
 class SubmitIn(BaseModel):
@@ -24,7 +24,7 @@ class StatusIn(BaseModel):
     status: str
 
 
-# Dependências (sobrescritas nos testes via app.dependency_overrides).
+# Dependencies (overridden in tests via app.dependency_overrides).
 def get_db():
     return get_database()
 
@@ -71,7 +71,7 @@ def create_app() -> FastAPI:
         with db.session() as s:
             data = service.video_detail(s, video_id)
         if data is None:
-            raise HTTPException(status_code=404, detail="vídeo não encontrado")
+            raise HTTPException(status_code=404, detail="video not found")
         return data
 
     @app.get("/api/videos/{video_id}/report")
@@ -79,7 +79,7 @@ def create_app() -> FastAPI:
         with db.session() as s:
             data = service.build_report(s, video_id)
         if data is None:
-            raise HTTPException(status_code=404, detail="vídeo não encontrado")
+            raise HTTPException(status_code=404, detail="video not found")
         return data
 
     @app.post("/api/videos/{video_id}/topics/{topic_id}")
@@ -88,29 +88,20 @@ def create_app() -> FastAPI:
         with db.session() as s:
             row = repo.set_topic_status(s, topic_id, body.status)
             if row is None:
-                raise HTTPException(status_code=404, detail="tópico não encontrado")
+                raise HTTPException(status_code=404, detail="topic not found")
         return {"id": topic_id, "status": body.status}
-
-    @app.post("/api/videos/{video_id}/moments/{moment_id}")
-    def mark_moment(video_id: str, moment_id: int, body: StatusIn, db=Depends(get_db)) -> dict:
-        _validate_status(body.status)
-        with db.session() as s:
-            row = repo.set_moment_status(s, moment_id, body.status)
-            if row is None:
-                raise HTTPException(status_code=404, detail="momento não encontrado")
-        return {"id": moment_id, "status": body.status}
 
     @app.get("/api/videos/{video_id}/export")
     def export(video_id: str, format: str = "json", db=Depends(get_db)):
         if format != "json":
-            raise HTTPException(status_code=400, detail="formato suportado: json")
+            raise HTTPException(status_code=400, detail="supported format: json")
         with db.session() as s:
             data = service.export_cuts(s, video_id)
         if data is None:
-            raise HTTPException(status_code=404, detail="vídeo não encontrado")
+            raise HTTPException(status_code=404, detail="video not found")
         return JSONResponse(
             content=data,
-            headers={"Content-Disposition": f'attachment; filename="{video_id}-cortes.json"'},
+            headers={"Content-Disposition": f'attachment; filename="{video_id}-cuts.json"'},
         )
 
     @app.post("/api/videos/{video_id}/reenqueue", status_code=202)
@@ -120,7 +111,7 @@ def create_app() -> FastAPI:
         try:
             return reenqueue_video(video_id, database=db, queue=queue)
         except KeyError:
-            raise HTTPException(status_code=404, detail="vídeo não encontrado")
+            raise HTTPException(status_code=404, detail="video not found")
 
     @app.post("/api/videos/{video_id}/stop")
     def stop(video_id: str, db=Depends(get_db), stopper=Depends(get_stopper)) -> dict:
@@ -129,7 +120,7 @@ def create_app() -> FastAPI:
         try:
             return stop_video(video_id, database=db, stopper=stopper)
         except KeyError:
-            raise HTTPException(status_code=404, detail="vídeo não encontrado")
+            raise HTTPException(status_code=404, detail="video not found")
 
     @app.delete("/api/videos/{video_id}")
     def remove(video_id: str, db=Depends(get_db), stopper=Depends(get_stopper),
@@ -139,11 +130,11 @@ def create_app() -> FastAPI:
         try:
             return delete_video(video_id, settings=settings, database=db, stopper=stopper)
         except KeyError:
-            raise HTTPException(status_code=404, detail="vídeo não encontrado")
+            raise HTTPException(status_code=404, detail="video not found")
         except VideoBusyError:
             raise HTTPException(
                 status_code=409,
-                detail="vídeo em processamento; interrompa (stop) antes de deletar",
+                detail="video is being processed; stop it before deleting",
             )
 
     _mount_static(app)
@@ -152,11 +143,11 @@ def create_app() -> FastAPI:
 
 def _validate_status(status: str) -> None:
     if status not in _VALID_STATUS:
-        raise HTTPException(status_code=400, detail=f"status inválido: {status}")
+        raise HTTPException(status_code=400, detail=f"invalid status: {status}")
 
 
 def _mount_static(app: FastAPI) -> None:
-    """Serve a SPA compilada (M4), se existir."""
+    """Serve the compiled SPA (M4), if present."""
     dist = Path(__file__).parent.parent / "webui" / "dist"
     if dist.exists():
         from fastapi.staticfiles import StaticFiles

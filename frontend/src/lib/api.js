@@ -20,7 +20,6 @@ export const api = {
   detail: (id) => req('GET', `/videos/${id}`),
   report: (id) => req('GET', `/videos/${id}/report`),
   markTopic: (id, tid, status) => req('POST', `/videos/${id}/topics/${tid}`, { status }),
-  markMoment: (id, mid, status) => req('POST', `/videos/${id}/moments/${mid}`, { status }),
   reenqueue: (id) => req('POST', `/videos/${id}/reenqueue`),
   stop: (id) => req('POST', `/videos/${id}/stop`),
   remove: (id) => req('DELETE', `/videos/${id}`),

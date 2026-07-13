@@ -1,4 +1,10 @@
-"""Passagem MACRO: extração de tópicos (10–20 por live) via LLM + consolidação."""
+"""MACRO pass: extraction of topics via LLM + consolidation.
+
+There is no artificial cap on the number of topics: the count is decided by the
+content (one topic per genuinely distinct subject). The overlap between windows
+is de-duplicated by `merge_overlapping`, which only collapses items that overlap
+substantially — distinct adjacent subjects are preserved.
+"""
 
 from __future__ import annotations
 
@@ -13,8 +19,6 @@ from .runner import select_windows
 from .windowing import make_windows
 
 logger = get_logger(__name__)
-
-MAX_TOPICS = 20
 
 
 def extract_topics(
@@ -34,7 +38,7 @@ def extract_topics(
     raw: list[Topic] = []
     for payload in select_windows(
         windows, llm, system=TOPICS_SYSTEM, tool=TOPICS_TOOL, tool_name="record_topics",
-        settings=settings, label="Tópicos", warnings=warnings,
+        settings=settings, label="Topics", warnings=warnings,
     ):
         for item in coerce_items(payload, "topics"):
             try:
@@ -49,13 +53,9 @@ def extract_topics(
                     )
                 )
             except (KeyError, ValueError, TypeError) as exc:
-                logger.warning("Ignorando tópico malformado %r (%s)", item, exc)
+                logger.warning("Skipping malformed topic %r (%s)", item, exc)
 
-    topics = merge_overlapping(raw)
-    if len(topics) > MAX_TOPICS:
-        topics = sorted(topics, key=lambda t: t.score, reverse=True)[:MAX_TOPICS]
-        topics = sorted(topics, key=lambda t: t.start)
-    return topics
+    return merge_overlapping(raw)
 
 
 def _clamp_score(value: float) -> float:

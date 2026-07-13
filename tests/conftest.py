@@ -1,9 +1,9 @@
-"""Configuração compartilhada dos testes.
+"""Shared test configuration.
 
-Isola as configurações do ambiente real: os testes NÃO devem depender do `.env`
-do desenvolvedor nem de variáveis de ambiente (ex.: quando o `.env` está
-configurado para OpenRouter, `Settings()` não pode herdar isso e quebrar testes
-que assumem o provedor/chaves padrão).
+Isolates settings from the real environment: tests must NOT depend on the
+developer's `.env` nor on environment variables (e.g. when `.env` is configured
+for OpenRouter, `Settings()` must not inherit that and break tests that assume
+the default provider/keys).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ _ENV_VARS = (
 
 @pytest.fixture(autouse=True)
 def isolate_settings(monkeypatch):
-    """Faz `Settings()` ignorar o `.env` e as env vars do PRIMOCUT durante os testes."""
+    """Make `Settings()` ignore `.env` and the PRIMOCUT env vars during tests."""
     monkeypatch.setitem(Settings.model_config, "env_file", None)
     for var in _ENV_VARS:
         monkeypatch.delenv(var, raising=False)

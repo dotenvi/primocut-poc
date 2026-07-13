@@ -1,106 +1,108 @@
-# PRIMOCUT — Fase 1 (MVP): fila + banco + API + Web UI
+# PRIMOCUT — Phase 1 (MVP): queue + database + API + Web UI
 
-Transforma o pipeline CLI (Fase 0) numa aplicação web local, **reusando** os módulos do
-pipeline (nada de lógica reescrita). Fonte de verdade: [`PRIMOCUT.md`](./PRIMOCUT.md).
-Resiliência: [`FALLBACKS.md`](./FALLBACKS.md).
+Turns the Phase 0 CLI pipeline into a local web application, **reusing** the pipeline modules
+(no rewritten logic). Source of truth: [`PRIMOCUT.md`](./PRIMOCUT.md).
+Resilience: [`FALLBACKS.md`](./FALLBACKS.md).
 
-## Arquitetura
+## Architecture
 
 ```
-[Web UI Svelte] ──/api──> [FastAPI] ──enqueue──> [RQ + Redis] ──> [Worker]
+[Svelte Web UI] ──/api──> [FastAPI] ──enqueue──> [RQ + Redis] ──> [Worker]
                               │                                      │
                               └──────────────── [SQLite] <──────────┘
-                     (videos, jobs, transcripts, chat_signals, topics, cut_moments)
-[Disco] ← áudios (retenção temporária; limpeza agendada)
+                     (videos, jobs, transcripts, chat_signals, topics)
+[Disk] ← audio files (temporary retention; scheduled cleanup)
 ```
 
-- **1 job RQ por vídeo** executa as etapas sequencialmente (`worker/jobs.py:process_video`),
-  reusando `run_stages` (mesma lógica/resiliência do CLI) com `DbStore` (cache no banco) e
-  `DbReporter` (status/progresso ao vivo).
-- **Cache paga-uma-vez respaldado pelo banco:** reenfileirar pula etapas cujo artefato já existe
-  (transcrição/tópicos/momentos) — nada já concluído/pago é reprocessado.
-- **Progresso na UI = polling** (~2 s) — escolhido por simplicidade/robustez (single-user); status
-  e progresso já vivem no banco.
-- **Concorrência de GPU:** a etapa de transcrição adquire um **lock distribuído (Redis)**
-  (`primocut:gpu`), garantindo **1 transcrição por vez** independentemente de quantos `primocut
-  worker` estejam rodando. Assim, subir N workers é **seguro por construção**: as etapas leves
-  (download/chat/análise) de vídeos diferentes se sobrepõem, mas só uma entra na GPU. `timeout` do
-  lock (auto-libera se um worker morrer): `PRIMOCUT_GPU_LOCK_TIMEOUT` (default 2h).
-- **Degradação (FALLBACKS.md) preservada** e refletida na UI: falha degradável → relatório com
-  seção "⚠️ Execução degradada"; falha essencial (áudio/transcrição) → `Video.error`/`Job.failed`.
+- **1 RQ job per video** runs the stages sequentially (`worker/jobs.py:process_video`),
+  reusing `run_stages` (same logic/resilience as the CLI) with `DbStore` (database cache) and
+  `DbReporter` (live status/progress).
+- **Pay-once cache backed by the database:** re-enqueueing skips stages whose artifact already
+  exists (transcript/topics) — nothing already completed/paid for is reprocessed.
+- **UI progress = polling** (~2 s) — chosen for simplicity/robustness (single-user); status and
+  progress already live in the database.
+- **GPU concurrency:** the transcription stage acquires a **distributed lock (Redis)**
+  (`primocut:gpu`), guaranteeing **1 transcription at a time** regardless of how many `primocut
+  worker` processes run. So bringing up N workers is **safe by construction**: the light stages
+  (download/chat/analysis) of different videos overlap, but only one enters the GPU. Lock `timeout`
+  (auto-releases if a worker dies): `PRIMOCUT_GPU_LOCK_TIMEOUT` (default 2h).
+- **Degradation (FALLBACKS.md) preserved** and reflected in the UI: a degradable failure → report
+  with a "⚠️ Degraded run" section; an essential failure (audio/transcription) →
+  `Video.error`/`Job.failed`.
 
-## Banco (SQLite)
+## Database (SQLite)
 
-Tabelas: `videos, jobs, transcripts, chat_signals, topics, cut_moments, schema_migrations`.
-Migrations simples: schema base via `create_all` (v1) + deltas `db/migrations/NNN_*.sql`.
-- `Video.status`: `queued → downloading → transcribing → analyzing → done | error`; **`stopped`** quando interrompido (via `stop`). Reprocessar (`reenqueue`) reusa o cache; deletar (`DELETE`) apaga tudo e exige reenviar a URL para recomeçar do zero.
-- Áudio = arquivo em disco (apagável). Transcrição/tópicos/momentos/sinais = **permanentes** (banco).
+Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations`.
+Simple migrations: base schema via `create_all` (v1) + `db/migrations/NNN_*.sql` deltas.
+- `Video.status`: `queued → downloading → transcribing → analyzing → done | error`; **`stopped`** when interrupted (via `stop`). Reprocessing (`reenqueue`) reuses the cache; deleting (`DELETE`) removes everything and requires resubmitting the URL to start from scratch.
+- Audio = file on disk (deletable). Transcript/topics/signals = **permanent** (database).
 
-## Pré-requisitos
+## Prerequisites
 
-- **Redis** (fila): `sudo apt install redis-server` ou `docker run -p 6379:6379 redis`.
-- **Node** (build da UI): já validado (v22). Deps Python via `/usr/bin/python3 -m pip --python .venv/bin/python install -r requirements.txt`.
-- `primocut doctor` valida GPU/FFmpeg/yt-dlp/chave/SDK **+ Redis + Banco**.
+- **Redis** (queue): `sudo apt install redis-server` or `docker run -p 6379:6379 redis`.
+- **Node** (UI build): already validated (v22). Python deps via `/usr/bin/python3 -m pip --python .venv/bin/python install -r requirements.txt`.
+- `primocut doctor` validates GPU/FFmpeg/yt-dlp/key/SDK **+ Redis + Database**.
 
-## Como rodar (produção local)
+## How to run (local production)
 
 ```bash
-# 1. build da UI (uma vez, ou quando mudar o frontend)
+# 1. build the UI (once, or whenever the frontend changes)
 cd frontend && npm install && npm run build && cd ..
 
-# 2. Redis no ar (ver acima), depois em terminais separados:
+# 2. Redis up (see above), then in separate terminals:
 source .venv/bin/activate
-primocut worker      # processa a fila (precisa de Redis e GPU p/ transcrição real)
-primocut serve       # API + UI em http://127.0.0.1:8000
+primocut worker      # processes the queue (needs Redis and a GPU for real transcription)
+primocut serve       # API + UI at http://127.0.0.1:8000
 ```
-Abra o navegador em `http://127.0.0.1:8000`: envie uma URL, acompanhe o status ao vivo na lista,
-abra o relatório (tópicos macro + momentos, atividade do chat com picos, transcrição pesquisável,
-timestamps clicáveis, 🔥 nos itens que coincidem com picos), marque cortes e exporte JSON.
+Open the browser at `http://127.0.0.1:8000`: submit a URL, follow the live status in the list,
+open the report (macro topics, chat activity with peaks, searchable transcript, clickable
+timestamps, 🔥 on items that coincide with peaks), mark cuts and export JSON. The report screen
+also embeds the official YouTube player (sticky at the top): clicking a topic's **Watch** button
+seeks the player to that timestamp. Topics live inside a collapsible card (expand/collapse all).
 
-## Desenvolvimento do frontend
+## Frontend development
 
 ```bash
-cd frontend && npm run dev     # Vite em :5173, proxy /api → :8000 (rode `primocut serve` junto)
+cd frontend && npm run dev     # Vite on :5173, proxy /api → :8000 (run `primocut serve` alongside)
 ```
 
-## API (resumo)
+## API (summary)
 
-| Método | Rota | Ação |
+| Method | Route | Action |
 |---|---|---|
-| POST | `/api/videos` `{url}` | valida, cria Video(queued) + Job, enfileira |
-| GET | `/api/videos` | lista com status/progresso |
-| GET | `/api/videos/{id}` | detalhe (video + job) |
-| GET | `/api/videos/{id}/report` | JSON do relatório (tópicos/momentos/chat/transcrição, 🔥, links) |
-| POST | `/api/videos/{id}/topics/{tid}` `{status}` | marcar/desmarcar (novo/marcado/descartado) |
-| POST | `/api/videos/{id}/moments/{mid}` `{status}` | idem para momentos |
-| GET | `/api/videos/{id}/export?format=json` | download dos cortes marcados (JSON) |
-| POST | `/api/videos/{id}/reenqueue` | reprocessa (idempotente; reseta status→queued) |
-| POST | `/api/videos/{id}/stop` | interrompe o processamento (cancela o job/worker; status→stopped) |
-| DELETE | `/api/videos/{id}` | apaga TUDO sobre o vídeo (banco + arquivos); recusa (409) se estiver ativo — pare antes |
+| POST | `/api/videos` `{url}` | validates, creates Video(queued) + Job, enqueues |
+| GET | `/api/videos` | list with status/progress |
+| GET | `/api/videos/{id}` | detail (video + job) |
+| GET | `/api/videos/{id}/report` | report JSON (topics/chat/transcript, 🔥, links) |
+| POST | `/api/videos/{id}/topics/{tid}` `{status}` | mark/unmark (new/marked/discarded) |
+| GET | `/api/videos/{id}/export?format=json` | download the marked cuts (JSON) |
+| POST | `/api/videos/{id}/reenqueue` | reprocess (idempotent; resets status→queued) |
+| POST | `/api/videos/{id}/stop` | interrupts processing (cancels the job/worker; status→stopped) |
+| DELETE | `/api/videos/{id}` | deletes EVERYTHING about the video (database + files); refuses (409) if active — stop it first |
 
-### Formato de exportação (JSON)
+### Export format (JSON)
 ```json
 { "video_id": "...", "url": "...", "title": "...", "generated_at": "...",
-  "cuts": [ { "type": "topic|moment", "title": "...", "start_seconds": 0, "end_seconds": 20,
+  "cuts": [ { "title": "...", "start_seconds": 0, "end_seconds": 20,
               "start_hms": "0:00", "end_hms": "0:20",
               "youtube_url": "https://youtube.com/watch?v=ID&t=0", "score": 0.7 } ] }
 ```
 
-## Limpeza agendada
+## Scheduled cleanup
 
 ```bash
-primocut cleanup                 # one-shot (bom para cron); apaga áudios > N dias
+primocut cleanup                 # one-shot (good for cron); deletes audio > N days
 primocut cleanup --days 3
-primocut cleanup --schedule      # registra limpeza diária no rq-scheduler (rode um `rqscheduler`)
+primocut cleanup --schedule      # registers a daily cleanup on rq-scheduler (run an `rqscheduler`)
 ```
-Só apaga `*.wav/*.m4a/*.mp3`; **nunca** toca transcrições/tópicos/sinais (permanentes no banco).
+Only deletes `*.wav/*.m4a/*.mp3`; **never** touches transcripts/topics/signals (permanent in the database).
 
-## O que continua da Fase 0
-`primocut doctor/run/models` seguem operacionais. O CLI `run` usa `FileStore` (cache JSON) +
-relatório Markdown, comportamento idêntico. Multi-provedor de LLM (Anthropic/OpenAI/OpenRouter) e a
-regra de ouro (LLM seleciona índices, nunca gera timestamps) preservados.
+## What carries over from Phase 0
+`primocut doctor/run/models` remain operational. The `run` CLI uses `FileStore` (JSON cache) +
+Markdown report, identical behavior. Multi-provider LLM (Anthropic/OpenAI/OpenRouter) and the
+golden rule (the LLM selects indices, never generates timestamps) preserved.
 
-## Testes (você roda)
-`pytest -q` cobre: migrations/DAO, transições de estado do job, **reenfileiramento idempotente
-(cache respeitado)**, endpoints da API, marcação e exportação de cortes, e a limpeza (não apaga
-áudio recente, nunca apaga transcrição). Sem necessidade de Redis/GPU reais (fakes + execução inline).
+## Tests (you run them)
+`pytest -q` covers: migrations/DAO, job state transitions, **idempotent re-enqueue (cache
+respected)**, API endpoints, cut marking and export, and cleanup (does not delete recent audio,
+never deletes a transcript). No real Redis/GPU needed (fakes + inline execution).

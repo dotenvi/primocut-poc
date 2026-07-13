@@ -1,8 +1,8 @@
-"""Conexão com o banco + migrations simples.
+"""Database connection + simple migrations.
 
-Estratégia (migrations simples, sem Alembic): o schema base é criado por
-`create_all` e carimbado como versão 1; deltas futuros ficam em arquivos
-`migrations/NNN_*.sql` aplicados em ordem e rastreados em `schema_migrations`.
+Strategy (simple migrations, no Alembic): the base schema is created by
+`create_all` and stamped as version 1; future deltas live in
+`migrations/NNN_*.sql` files applied in order and tracked in `schema_migrations`.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ class Database:
         self._Session = sessionmaker(self.engine, expire_on_commit=False, future=True)
 
         @event.listens_for(self.engine, "connect")
-        def _fk_on(dbapi_conn, _rec):  # habilita FKs no SQLite
+        def _fk_on(dbapi_conn, _rec):  # enable FKs on SQLite
             dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
     @classmethod
@@ -41,7 +41,7 @@ class Database:
         return cls(f"sqlite:///{settings.db_path}")
 
     def init(self) -> None:
-        """Cria o schema base e aplica migrations pendentes (idempotente)."""
+        """Create the base schema and apply pending migrations (idempotent)."""
         Base.metadata.create_all(self.engine)
         with self.session() as s:
             current = s.execute(select(SchemaMigration.version).order_by(
@@ -50,7 +50,7 @@ class Database:
                 s.add(SchemaMigration(version=_BASE_VERSION))
                 current = _BASE_VERSION
             for version, sql_path in _pending_sql(current):
-                logger.info("Aplicando migration %03d (%s)", version, sql_path.name)
+                logger.info("Applying migration %03d (%s)", version, sql_path.name)
                 for stmt in _split_sql(sql_path.read_text(encoding="utf-8")):
                     s.execute(text(stmt))
                 s.add(SchemaMigration(version=version))
@@ -87,7 +87,7 @@ _db: Database | None = None
 
 
 def get_database(settings: Settings | None = None) -> Database:
-    """Database singleton (para app/worker). Testes criam instâncias próprias."""
+    """Database singleton (for app/worker). Tests create their own instances."""
     global _db
     if _db is None:
         _db = Database.from_settings(settings)

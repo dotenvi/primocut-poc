@@ -1,8 +1,8 @@
-"""Consulta o catálogo de modelos do OpenRouter (para achar modelos com tool use).
+"""Query the OpenRouter model catalog (to find models with tool use).
 
-A listagem de modelos do OpenRouter é pública (não precisa de chave nem saldo).
-Útil para descobrir modelos GRÁTIS que suportam ferramentas (function calling),
-já que a nossa análise depende disso.
+The OpenRouter model listing is public (needs no key or balance). Useful for
+discovering FREE models that support tools (function calling), since our
+analysis depends on it.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
 def _http_get_json(url: str) -> Any:
     req = urllib.request.Request(url, headers={"User-Agent": "primocut"})
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 (URL fixa/interna)
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 (fixed/internal URL)
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -25,14 +25,14 @@ def fetch_models(
     *,
     fetch: Callable[[str], Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Retorna a lista crua de modelos do OpenRouter (`data`)."""
+    """Return the raw list of OpenRouter models (`data`)."""
     fetch = fetch or _http_get_json
     payload = fetch(base_url.rstrip("/") + "/models")
     return list(payload.get("data", []))
 
 
 def is_free(model: dict[str, Any]) -> bool:
-    """Modelo é grátis quando prompt e completion custam 0."""
+    """A model is free when both prompt and completion cost 0."""
     pricing = model.get("pricing") or {}
     try:
         return float(pricing.get("prompt", "0")) == 0.0 and float(
@@ -52,7 +52,7 @@ def filter_models(
     free_only: bool = False,
     tools_only: bool = True,
 ) -> list[dict[str, Any]]:
-    """Filtra e normaliza os modelos para `{id, free, tools}`, ordenados por id."""
+    """Filter and normalize the models to `{id, free, tools}`, sorted by id."""
     out: list[dict[str, Any]] = []
     for m in models:
         tools = supports_tools(m)

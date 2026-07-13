@@ -1,7 +1,8 @@
-"""Relato de progresso das etapas do pipeline (injetável).
+"""Pipeline stage progress reporting (injectable).
 
-O CLI usa `LogReporter` (só loga; comportamento da Fase 0). O worker usa
-`DbReporter`, que persiste stage/progresso/status no banco para a UI consultar.
+The CLI uses `LogReporter` (only logs; Phase 0 behaviour). The worker uses
+`DbReporter`, which persists stage/progress/status in the database for the UI to
+poll.
 """
 
 from __future__ import annotations
@@ -22,16 +23,16 @@ class ProgressReporter(Protocol):
 
 
 class LogReporter:
-    """No-op de persistência (o `step()` já loga início/fim de cada etapa)."""
+    """No-op persistence (`step()` already logs the start/end of each stage)."""
 
     def update(
         self, *, stage: str, progress: int, video_status: VideoStatus | None = None
     ) -> None:
-        logger.debug("progresso: %s (%d%%) status=%s", stage, progress, video_status)
+        logger.debug("progress: %s (%d%%) status=%s", stage, progress, video_status)
 
 
 class DbReporter:
-    """Persiste stage/progresso/status no banco (job + video)."""
+    """Persists stage/progress/status in the database (job + video)."""
 
     def __init__(self, database, job_id: int, video_id: str) -> None:
         self.db = database

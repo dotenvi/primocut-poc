@@ -1,4 +1,4 @@
-"""Fila assíncrona (RQ): enfileiramento e execução do pipeline por vídeo."""
+"""Async queue (RQ): enqueueing and per-video pipeline execution."""
 
 from .jobs import process_video
 from .queue import (

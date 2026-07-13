@@ -1,138 +1,135 @@
-# PRIMOCUT — Catálogo de Fallbacks e Resiliência
+# PRIMOCUT — Fallbacks and Resilience Catalog
 
-Mapa de **todo** comportamento de recuperação/degradação do sistema. Fonte de verdade do produto:
-[`PRIMOCUT.md`](./PRIMOCUT.md). Plano da resiliência por etapa: `plano aprovado` (ver
+A map of **every** recovery/degradation behavior in the system. Product source of truth:
+[`PRIMOCUT.md`](./PRIMOCUT.md). Per-stage resilience plan: `approved plan` (see
 [`FASE0-STATUS-E-EXECUCAO.md`](./FASE0-STATUS-E-EXECUCAO.md)).
 
-## Princípios
+## Principles
 
-- **Degradar, não abortar.** Sempre que possível, gerar o melhor relatório com o que deu certo,
-  marcando as seções indisponíveis. Só abortar quando é **impossível continuar**.
-- **Essencial vs. degradável.** Áudio e transcrição são essenciais (sem eles não há o que analisar);
-  metadados, chat e análise são degradáveis.
-- **Cache paga-uma-vez.** Etapas caras são persistidas em `data/<video_id>.*` e reaproveitadas;
-  nenhum trabalho já concluído (e pago) é refeito.
-- **Nunca inventar timestamps.** A robustez da análise nunca relaxa a regra: o LLM seleciona índices
-  de segmento; o código resolve em segundos e clampa índices inválidos.
+- **Degrade, don't abort.** Whenever possible, produce the best report from what succeeded,
+  flagging the unavailable sections. Only abort when it is **impossible to continue**.
+- **Essential vs. degradable.** Audio and transcription are essential (without them there is nothing
+  to analyze); metadata, chat and analysis are degradable.
+- **Pay-once cache.** Expensive stages are persisted in `data/<video_id>.*` and reused;
+  no work already completed (and paid for) is redone.
+- **Never invent timestamps.** Analysis robustness never relaxes the rule: the LLM selects segment
+  indices; the code resolves them into seconds and clamps invalid indices.
 
-### Legenda de status
-- ✅ **Implementado** (no código hoje) — todos os fallbacks listados abaixo já estão implementados e cobertos por testes.
+### Status legend
+- ✅ **Implemented** (in the code today) — all fallbacks listed below are already implemented and covered by tests.
 
 ---
 
-## 1. Fallbacks por etapa do pipeline
+## 1. Fallbacks per pipeline stage
 
-| Etapa | Gatilho | Comportamento de fallback | Status |
+| Stage | Trigger | Fallback behavior | Status |
 |---|---|---|---|
-| **Metadados** | `yt-dlp -J` falha por erro transitório (rede/rate limit) | Retry com backoff exponencial | ✅ |
-| **Metadados** | `yt-dlp -J` falha de forma permanente | **Degrada**: monta `Video` mínimo (id extraído da URL, título/canal "(desconhecido)", duração 0); adiciona aviso; a duração é preenchida depois a partir de `transcript.duration` | ✅ |
-| **Download áudio** | Erro transitório do yt-dlp | Retry com backoff | ✅ |
-| **Download áudio** | Extrator do YouTube quebrou p/ um client | Tenta `--extractor-args youtube:player_client=<c>` numa lista configurável (ex.: `android,web`) | ✅ |
-| **Download áudio** | Falha final (essencial) | **Aborta** com mensagem clara (sem áudio não há transcrição) | ✅ |
-| **Transcrição** | Erro de GPU/VRAM (cabe nos 8 GB?) | Loop degradando o `compute_type`: `float16 → int8_float16 → int8`; registra aviso quando degrada | ✅ |
-| **Transcrição** | Nenhum `compute_type` coube (essencial) | **Aborta** com orientação (sem fallback para CPU, por decisão) | ✅ |
-| **Transcrição** | `libcublas`/`libcudnn` não no `LD_LIBRARY_PATH` | Pré-carrega as libs CUDA dos pacotes pip da NVIDIA (`nvidia-cublas-cu12`/`nvidia-cudnn-cu12`); se ausentes, deixa o ctranslate2 tentar o PATH do sistema | ✅ |
-| **Chat** | `chat-downloader` lança exceção / sem replay | **Fallback yt-dlp `--live-chat`** (parseia offsets das mensagens) | ✅ |
-| **Chat** | Ambos falham / replay inexistente | Retorna `None`; o pipeline **segue sem chat** (sinal opcional) e registra aviso | ✅ |
-| **Análise (tópicos/momentos)** | Erro transitório do provedor por janela (429/5xx/timeout) | Retry com backoff no mesmo modelo (sem trocar de modelo/provedor) | ✅ |
-| **Análise (tópicos/momentos)** | Falha permanente numa janela (crédito, auth, sem tool use) | **Encerra a etapa mantendo o que já foi coletado** (parcial); pipeline degrada o relatório + aviso | ✅ |
-| **Análise (tópicos/momentos)** | Resposta do LLM fora do formato | Leitura tolerante: normaliza dict indexado, **ignora itens malformados com aviso** (nunca derruba a etapa) | ✅ |
-| **Análise (tópicos/momentos)** | LLM devolve índices fora do intervalo | `resolve_span` **clampa** aos limites reais e ordena se vierem invertidos | ✅ |
-| **Relatório** | Alguma seção sem dados | Renderiza "Nenhum tópico/momento identificado" e/ou "Sem replay de chat"; nunca falha | ✅ |
-| **Relatório** | Execução teve degradações | Seção **"⚠️ Execução degradada"** logo após os metadados, listando o que falhou/foi pulado | ✅ |
+| **Metadata** | `yt-dlp -J` fails on a transient error (network/rate limit) | Retry with exponential backoff | ✅ |
+| **Metadata** | `yt-dlp -J` fails permanently | **Degrades**: builds a minimal `Video` (id extracted from the URL, title/channel "(unknown)", duration 0); adds a warning; duration is filled in later from `transcript.duration` | ✅ |
+| **Audio download** | Transient yt-dlp error | Retry with backoff | ✅ |
+| **Audio download** | YouTube extractor broke for a client | Tries `--extractor-args youtube:player_client=<c>` over a configurable list (e.g. `android,web`) | ✅ |
+| **Audio download** | Final failure (essential) | **Aborts** with a clear message (without audio there is no transcription) | ✅ |
+| **Transcription** | GPU/VRAM error (does it fit in 8 GB?) | Loop degrading the `compute_type`: `float16 → int8_float16 → int8`; records a warning when it degrades | ✅ |
+| **Transcription** | No `compute_type` fit (essential) | **Aborts** with guidance (no CPU fallback, by decision) | ✅ |
+| **Transcription** | `libcublas`/`libcudnn` not on `LD_LIBRARY_PATH` | Preloads the CUDA libs from the NVIDIA pip packages (`nvidia-cublas-cu12`/`nvidia-cudnn-cu12`); if absent, lets ctranslate2 try the system PATH | ✅ |
+| **Chat** | `chat-downloader` raises / no replay | **yt-dlp `--live-chat` fallback** (parses the message offsets) | ✅ |
+| **Chat** | Both fail / replay does not exist | Returns `None`; the pipeline **continues without chat** (optional signal) and records a warning | ✅ |
+| **Analysis (topics)** | Transient provider error per window (429/5xx/timeout) | Retry with backoff on the same model (without switching model/provider) | ✅ |
+| **Analysis (topics)** | Permanent failure on a window (credit, auth, no tool use) | **Ends the stage keeping whatever was already collected** (partial); the pipeline degrades the report + warning | ✅ |
+| **Analysis (topics)** | LLM response off-format | Tolerant parsing: normalizes an indexed dict, **ignores malformed items with a warning** (never tears down the stage) | ✅ |
+| **Analysis (topics)** | LLM returns out-of-range indices | `resolve_span` **clamps** to the real limits and sorts them if reversed | ✅ |
+| **Report** | Some section has no data | Renders "No topic identified" and/or "No chat replay"; never fails | ✅ |
+| **Report** | The run had degradations | A **"⚠️ Degraded run"** section right after the metadata, listing what failed/was skipped | ✅ |
 
 ---
 
-## 2. Cache / retomada (não re-paga o que já deu certo) ✅
+## 2. Cache / resume (never re-pays for what already succeeded) ✅
 
-Cada arquivo em `data/<video_id>.*` é reaproveitado em re-execuções:
+Each file in `data/<video_id>.*` is reused across re-runs:
 
-| Arquivo | Etapa que evita repetir |
+| File | Stage it avoids repeating |
 |---|---|
-| `*.16k.wav` | Download + normalização do áudio |
-| `*.transcript.json` | Transcrição (a etapa mais cara em GPU) |
-| `*.topics.json` | Análise macro (LLM, paga) |
-| `*.moments.json` | Análise fina (LLM, paga) |
+| `*.16k.wav` | Audio download + normalization |
+| `*.transcript.json` | Transcription (the most expensive GPU stage) |
+| `*.topics.json` | Macro analysis (LLM, paid) |
 
-- Os **tópicos são gravados antes** de a etapa de momentos rodar → uma falha nos momentos não
-  descarta os tópicos já pagos.
-- ✅ **Ajuste implementado:** resultado **parcial** de uma etapa (quando ela é encerrada no meio por
-  falha permanente) alimenta o relatório atual, mas **não** é cacheado — para que um re-run tente de
-  novo. Como as janelas são poucas (~2 numa live de 33 min), a re-tentativa é barata.
-- Para forçar recomputar, apague o arquivo de cache correspondente em `data/`.
+- ✅ **Implemented tweak:** the **partial** result of a stage (when it is ended mid-way by a
+  permanent failure) feeds the current report, but is **not** cached — so a re-run tries again.
+  Because the windows are few (~2 in a 33-min live), the retry is cheap.
+- To force a recompute, delete the corresponding cache file in `data/`.
 
 ---
 
-## 3. Guardas de robustez transversais ✅
+## 3. Cross-cutting robustness guards ✅
 
-Comportamentos que evitam falhas antes de virarem erro (já no código):
+Behaviors that prevent failures before they become errors (already in the code):
 
-| Guarda | O que faz |
+| Guard | What it does |
 |---|---|
-| **Validação de URL** (`validate_youtube_url`) | Rejeita links fora do formato (host não-YouTube, ID inválido, contra-barras de escape) com mensagem clara e **não dispara** o pipeline; devolve a URL canônica `watch?v=<ID>` |
-| **Extração de ID** (`extract_video_id`) | Aceita `watch?v=`, `youtu.be/`, `/live/`, `/embed/`, `/shorts/` e cai para o último segmento do path |
-| **yt-dlp via módulo** | Invoca `python -m yt_dlp` pelo interpretador atual → funciona mesmo sem `.venv/bin` no `PATH` |
-| **doctor: yt-dlp** | Considera OK se o **módulo** `yt_dlp` está instalado (não exige binário no PATH) |
-| **doctor: chave da API** | Valida a chave do **provedor selecionado** (`llm_provider`) |
-| **doctor: SDK do provedor** | Avisa se o SDK do provedor (openai/anthropic) não está instalado |
-| **Import do SDK OpenAI** | Se faltar o pacote `openai` (usado por OpenAI/OpenRouter), erro claro dizendo o comando de instalação |
-| **Sem suporte a tools** (`ToolCallError`) | Se o modelo não retorna a function/tool call forçada, erro claro (provavelmente não suporta tool use) + dica do comando `primocut models` |
-| **Sinais do chat** | `z-score` com desvio-padrão 0 → sem picos (sem divisão por zero); lista de mensagens vazia → sinal vazio |
-| **`primocut models`** | Lista modelos do OpenRouter com suporte a ferramentas (inclusive **gratuitos**) para escolher um compatível sem gastar |
+| **URL validation** (`validate_youtube_url`) | Rejects out-of-format links (non-YouTube host, invalid ID, escape backslashes) with a clear message and **does not trigger** the pipeline; returns the canonical `watch?v=<ID>` URL |
+| **ID extraction** (`extract_video_id`) | Accepts `watch?v=`, `youtu.be/`, `/live/`, `/embed/`, `/shorts/` and falls back to the last path segment |
+| **yt-dlp via module** | Invokes `python -m yt_dlp` through the current interpreter → works even without `.venv/bin` on `PATH` |
+| **doctor: yt-dlp** | Considers it OK if the `yt_dlp` **module** is installed (does not require the binary on PATH) |
+| **doctor: API key** | Validates the key of the **selected provider** (`llm_provider`) |
+| **doctor: provider SDK** | Warns if the provider SDK (openai/anthropic) is not installed |
+| **OpenAI SDK import** | If the `openai` package is missing (used by OpenAI/OpenRouter), a clear error stating the install command |
+| **No tool support** (`ToolCallError`) | If the model does not return the forced function/tool call, a clear error (probably no tool-use support) + a hint about the `primocut models` command |
+| **Chat signals** | `z-score` with standard deviation 0 → no peaks (no division by zero); empty message list → empty signal |
+| **`primocut models`** | Lists OpenRouter models that support tools (including **free** ones) to pick a compatible one without spending |
 
 ---
 
-## 4. Seleção de provedor de LLM ✅
+## 4. LLM provider selection ✅
 
-A análise é agnóstica de provedor (interface `SelectionLLM`). Seleção automática por `PRIMOCUT_LLM_PROVIDER`:
+The analysis is provider-agnostic (`SelectionLLM` interface). Automatic selection via `PRIMOCUT_LLM_PROVIDER`:
 
-| Provedor | SDK | Observação |
+| Provider | SDK | Note |
 |---|---|---|
-| `anthropic` (default) | `anthropic` | Modelo default `claude-sonnet-5` |
-| `openai` | `openai` | Modelo default `gpt-4o` |
-| `openrouter` | `openai` (base_url própria) | Modelo default `openai/gpt-4o-mini`; slugs `provedor/modelo` |
+| `anthropic` (default) | `anthropic` | Default model `claude-sonnet-5` |
+| `openai` | `openai` | Default model `gpt-4o` |
+| `openrouter` | `openai` (custom base_url) | Default model `openai/gpt-4o-mini`; `provider/model` slugs |
 
-> **Não há troca automática de provedor/modelo em caso de falha** (decisão: LLM = "só retry").
-> Trocar de provedor/modelo é sempre explícito, via `.env` ou flags `--provider`/`--model`.
+> **There is no automatic provider/model switch on failure** (decision: LLM = "retry only").
+> Switching provider/model is always explicit, via `.env` or the `--provider`/`--model` flags.
 
 ---
 
-## 5. Matriz: essencial vs. degradável
+## 5. Matrix: essential vs. degradable
 
-| Etapa | Se falhar de vez | Relatório sai? |
+| Stage | If it fails for good | Does the report come out? |
 |---|---|---|
-| Metadados | Degrada (Video mínimo) | ✅ Sim, com aviso |
-| Download áudio | Aborta | ❌ Não (essencial) |
-| Transcrição | Aborta | ❌ Não (essencial) |
-| Chat | Segue sem chat | ✅ Sim, com aviso |
-| Análise (tópicos/momentos) | Usa o parcial (ou vazio) | ✅ Sim, com aviso |
-| Relatório | — | ✅ Sempre gera |
+| Metadata | Degrades (minimal Video) | ✅ Yes, with a warning |
+| Audio download | Aborts | ❌ No (essential) |
+| Transcription | Aborts | ❌ No (essential) |
+| Chat | Continues without chat | ✅ Yes, with a warning |
+| Analysis (topics) | Uses the partial (or empty) result | ✅ Yes, with a warning |
+| Report | — | ✅ Always generated |
 
 ---
 
-## 6. Variáveis de ambiente relacionadas
+## 6. Related environment variables
 
-| Variável | Efeito | Status |
+| Variable | Effect | Status |
 |---|---|---|
 | `PRIMOCUT_LLM_PROVIDER` | `anthropic` \| `openai` \| `openrouter` | ✅ |
-| `PRIMOCUT_ANTHROPIC_MODEL` / `PRIMOCUT_OPENAI_MODEL` / `PRIMOCUT_OPENROUTER_MODEL` | Modelo por provedor | ✅ |
-| `PRIMOCUT_WHISPER_COMPUTE_TYPE` | Força o `compute_type` (ex.: `int8_float16` p/ caber na VRAM) | ✅ |
+| `PRIMOCUT_ANTHROPIC_MODEL` / `PRIMOCUT_OPENAI_MODEL` / `PRIMOCUT_OPENROUTER_MODEL` | Model per provider | ✅ |
+| `PRIMOCUT_WHISPER_COMPUTE_TYPE` | Force the `compute_type` (e.g. `int8_float16` to fit in VRAM) | ✅ |
 | `PRIMOCUT_WHISPER_DEVICE` | `cuda` (default) \| `cpu` | ✅ |
-| `PRIMOCUT_CHAT_ZSCORE_THRESHOLD` | Limiar de detecção de picos do chat | ✅ |
-| `PRIMOCUT_WINDOW_TARGET_SECONDS` / `PRIMOCUT_WINDOW_OVERLAP_SECONDS` | Janelamento da análise | ✅ |
-| `PRIMOCUT_RETRY_ATTEMPTS` / `PRIMOCUT_RETRY_BASE_DELAY` / `PRIMOCUT_RETRY_MAX_DELAY` | Política de retry (backoff) das etapas | ✅ |
-| `PRIMOCUT_WHISPER_COMPUTE_FALLBACKS` | Sequência de degradação do `compute_type` na GPU | ✅ |
-| `PRIMOCUT_YTDLP_PLAYER_CLIENTS` | Lista de `player_client` a tentar no download | ✅ |
+| `PRIMOCUT_CHAT_ZSCORE_THRESHOLD` | Chat peak detection threshold | ✅ |
+| `PRIMOCUT_WINDOW_TARGET_SECONDS` / `PRIMOCUT_WINDOW_OVERLAP_SECONDS` | Analysis windowing | ✅ |
+| `PRIMOCUT_RETRY_ATTEMPTS` / `PRIMOCUT_RETRY_BASE_DELAY` / `PRIMOCUT_RETRY_MAX_DELAY` | Retry (backoff) policy for the stages | ✅ |
+| `PRIMOCUT_WHISPER_COMPUTE_FALLBACKS` | GPU `compute_type` degradation sequence | ✅ |
+| `PRIMOCUT_YTDLP_PLAYER_CLIENTS` | List of `player_client` values to try on download | ✅ |
 
 ---
 
-## 7. Ponteiros de código
+## 7. Code pointers
 
-- Pipeline / orquestração: `src/primocut/pipeline.py`
-- Análise (leitura tolerante, provedores, tool use): `src/primocut/analysis/{parse,llm,topics,moments}.py`
-- Transcrição (preload CUDA, engine): `src/primocut/transcription/faster_whisper_engine.py`
+- Pipeline / orchestration: `src/primocut/pipeline.py`
+- Analysis (tolerant parsing, providers, tool use): `src/primocut/analysis/{parse,llm,topics}.py`
+- Transcription (CUDA preload, engine): `src/primocut/transcription/faster_whisper_engine.py`
 - Download (URL, yt-dlp, ffmpeg): `src/primocut/download/audio.py`
-- Chat (opcional): `src/primocut/chat/downloader.py`
-- Modelos (resolve_span, clamp): `src/primocut/models.py`
-- Diagnóstico: `src/primocut/doctor.py`
-- (✅) Resiliência transversal (retry/backoff/classificação): `src/primocut/resilience.py`
+- Chat (optional): `src/primocut/chat/downloader.py`
+- Models (resolve_span, clamp): `src/primocut/models.py`
+- Diagnostics: `src/primocut/doctor.py`
+- (✅) Cross-cutting resilience (retry/backoff/classification): `src/primocut/resilience.py`

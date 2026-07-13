@@ -3,6 +3,7 @@
   import { api, isActive } from '../lib/api.js'
   import { hms } from '../lib/format.js'
   import PipelinePanel from '../components/PipelinePanel.svelte'
+  import Player from '../components/Player.svelte'
 
   export let id
 
@@ -10,6 +11,8 @@
   let error = ''
   let query = ''
   let timer
+  let playerRef // Player component instance (bind:this)
+  let expanded = {} // topic id -> expanded?
 
   function pending() {
     return !data || (data.video.status !== 'done' && data.video.status !== 'error')
@@ -30,16 +33,34 @@
   })
   onDestroy(() => clearInterval(timer))
 
-  async function mark(kind, item) {
-    const next = item.status === 'marcado' ? 'novo' : 'marcado'
+  async function mark(item) {
+    const next = item.status === 'marked' ? 'new' : 'marked'
     try {
-      if (kind === 'topic') await api.markTopic(id, item.id, next)
-      else await api.markMoment(id, item.id, next)
+      await api.markTopic(id, item.id, next)
       item.status = next
-      data = data // dispara reatividade
+      data = data // trigger reactivity
     } catch (e) {
       error = e.message
     }
+  }
+
+  function toggle(tid) {
+    expanded = { ...expanded, [tid]: !expanded[tid] }
+  }
+  function expandAll() {
+    const e = {}
+    for (const t of data.topics) e[t.id] = true
+    expanded = e
+  }
+  function collapseAll() {
+    expanded = {}
+  }
+
+  // Seek the embedded player to the topic start; if the player is unavailable
+  // (embed disabled / failed to load), fall back to opening YouTube.
+  function watch(t) {
+    const ok = playerRef && playerRef.seek(t.start)
+    if (!ok) window.open(t.youtube_url, '_blank', 'noreferrer')
   }
 
   async function reprocess() {
@@ -51,7 +72,7 @@
   }
 
   async function remove() {
-    if (!confirm('Deletar TUDO sobre este vídeo? Isso é irreversível — para reprocessar você precisará reenviar a URL.')) return
+    if (!confirm('Delete EVERYTHING about this video? This is irreversible — to reprocess you will need to resubmit the URL.')) return
     try { await api.remove(id); location.hash = '#/videos' } catch (e) { error = e.message }
   }
 
@@ -67,7 +88,7 @@
 {#if error}<p class="error">{error}</p>{/if}
 
 {#if !data}
-  <p class="muted">Carregando…</p>
+  <p class="muted">Loading…</p>
 {:else}
   <header class="report-head">
     <h1>{data.video.title}</h1>
@@ -76,12 +97,12 @@
       <span class="status status-{data.video.status}">{data.video.status}</span>
     </div>
     <div class="actions">
-      <a class="btn" href={api.exportUrl(id)} download>Exportar cortes (JSON)</a>
-      <button class="btn ghost" on:click={reprocess}>Reprocessar</button>
+      <a class="btn" href={api.exportUrl(id)} download>Export cuts (JSON)</a>
+      <button class="btn ghost" on:click={reprocess}>Reprocess</button>
       {#if isActive(data.video.status)}
-        <button class="btn ghost" on:click={stop}>Interromper</button>
+        <button class="btn ghost" on:click={stop}>Stop</button>
       {:else}
-        <button class="btn danger" on:click={remove}>Deletar</button>
+        <button class="btn danger" on:click={remove}>Delete</button>
       {/if}
     </div>
   </header>
@@ -96,75 +117,80 @@
 
   {#if data.warnings && data.warnings.length}
     <section class="degraded">
-      <h3>⚠️ Execução degradada</h3>
+      <h3>⚠️ Degraded run</h3>
       <ul>{#each data.warnings as w}<li>{w}</li>{/each}</ul>
     </section>
   {/if}
 
+  <!-- Sticky player: stays visible on the viewport while browsing topics -->
+  <div class="player-sticky">
+    <Player bind:this={playerRef} videoId={data.video.id} />
+  </div>
+
   <section>
-    <h2>Atividade do chat</h2>
+    <h2>Chat activity</h2>
     {#if data.chat_signal}
       <div class="spark">
         {#each data.chat_signal.per_minute as b}
           <div
             class="spark-bar"
             style="height:{Math.round((b.msgs / maxMsgs) * 100)}%"
-            title={`min ${b.minute}: ${b.msgs} msgs, ${b.laughs} risadas`}
+            title={`min ${b.minute}: ${b.msgs} msgs, ${b.laughs} laughs`}
           ></div>
         {/each}
       </div>
       {#if data.chat_signal.peaks.length}
         <div class="peaks">
-          Picos:
+          Peaks:
           {#each data.chat_signal.peaks as p}
             <a href={p.youtube_url} target="_blank" rel="noreferrer">{p.hms}</a>
           {/each}
         </div>
       {:else}
-        <p class="muted">Nenhum pico significativo.</p>
+        <p class="muted">No significant peak.</p>
       {/if}
     {:else}
-      <p class="muted">Sem replay de chat.</p>
+      <p class="muted">No chat replay.</p>
     {/if}
   </section>
 
-  <section>
-    <h2>Tópicos macro ({data.topics.length})</h2>
+  <article class="card topics-card">
+    <div class="card-head">
+      <h3>Topics ({data.topics.length})</h3>
+      <div class="card-actions">
+        <button class="mini" on:click={expandAll}>Expand all</button>
+        <button class="mini" on:click={collapseAll}>Collapse all</button>
+      </div>
+    </div>
     {#each data.topics as t (t.id)}
-      <div class="item {t.status === 'marcado' ? 'marked' : ''}">
-        <div class="grow">
-          <a href={t.youtube_url} target="_blank" rel="noreferrer"><b>{t.title}</b></a>
-          {#if t.fire}<span title="coincide com pico do chat">🔥</span>{/if}
+      <div class="topic {t.status === 'marked' ? 'marked' : ''}">
+        <div class="topic-head">
+          <button class="disclosure" on:click={() => toggle(t.id)} aria-expanded={!!expanded[t.id]}>
+            <span class="caret">{expanded[t.id] ? '▾' : '▸'}</span>
+            <b>{t.title}</b>
+          </button>
+          {#if t.fire}<span title="coincides with a chat peak">🔥</span>{/if}
           <span class="muted"> · {t.start_hms}–{t.end_hms} · score {t.score.toFixed(2)}</span>
-          <div class="muted">{t.summary}</div>
+          <span class="topic-spacer"></span>
+          <button class="mini" on:click={() => watch(t)}>▶ Watch</button>
+          <a class="mini link" href={t.youtube_url} target="_blank" rel="noreferrer">YouTube ↗</a>
+          <button class="cut" on:click={() => mark(t)}>
+            {t.status === 'marked' ? '✓ cut' : 'mark'}
+          </button>
         </div>
-        <button class="cut" on:click={() => mark('topic', t)}>
-          {t.status === 'marcado' ? '✓ corte' : 'marcar'}
-        </button>
+        {#if expanded[t.id]}
+          <div class="topic-body muted">{t.summary}</div>
+        {/if}
       </div>
     {/each}
-  </section>
+    {#if data.topics.length === 0}
+      <p class="muted">No topic identified.</p>
+    {/if}
+  </article>
 
   <section>
-    <h2>Momentos de corte ({data.moments.length})</h2>
-    {#each data.moments as m (m.id)}
-      <div class="item {m.status === 'marcado' ? 'marked' : ''}">
-        <div class="grow">
-          <a href={m.youtube_url} target="_blank" rel="noreferrer"><b>{m.title}</b></a>
-          {#if m.fire}<span title="coincide com pico do chat">🔥</span>{/if}
-          <span class="muted"> · {m.start_hms}–{m.end_hms} · score {m.score.toFixed(2)}</span>
-          <div class="muted">{m.reason}</div>
-        </div>
-        <button class="cut" on:click={() => mark('moment', m)}>
-          {m.status === 'marcado' ? '✓ corte' : 'marcar'}
-        </button>
-      </div>
-    {/each}
-  </section>
-
-  <section>
-    <h2>Transcrição</h2>
-    <input class="search" placeholder="buscar na transcrição…" bind:value={query} />
+    <h2>Transcript</h2>
+    <input class="search" placeholder="search the transcript…" bind:value={query} />
     <div class="transcript">
       {#each segs as s (s.index)}
         <p>

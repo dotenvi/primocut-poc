@@ -1,7 +1,7 @@
-"""DAO: conversões entre os modelos pydantic (Fase 0) e as linhas ORM.
+"""DAO: conversions between the pydantic models (Phase 0) and the ORM rows.
 
-Funções "pipeline-facing" retornam modelos pydantic (para reusar as etapas da
-Fase 0). Funções "API-facing" retornam linhas ORM (com id/status) para marcação.
+"Pipeline-facing" functions return pydantic models (to reuse the Phase 0
+stages). "API-facing" functions return ORM rows (with id/status) for marking.
 """
 
 from __future__ import annotations
@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from ..models import (
     ChatSignal,
-    CutMoment,
     MinuteBucket,
     Peak,
     Segment,
@@ -23,7 +22,6 @@ from ..models import (
 )
 from .models import (
     ChatSignalRow,
-    CutMomentRow,
     JobRow,
     TopicRow,
     TranscriptRow,
@@ -64,7 +62,7 @@ def set_video_status(s: Session, video_id: str, status: VideoStatus | str) -> No
 
 
 def update_video_meta(s: Session, video: Video) -> VideoRow:
-    """Atualiza só metadados (url/title/channel/duration); status é gerido à parte."""
+    """Update metadata only (url/title/channel/duration); status is handled elsewhere."""
     row = s.get(VideoRow, video.id)
     if row is None:
         row = VideoRow(id=video.id, status=video.status.value)
@@ -78,7 +76,7 @@ def update_video_meta(s: Session, video: Video) -> VideoRow:
 
 
 def delete_video(s: Session, video_id: str) -> bool:
-    """Apaga o vídeo e TUDO relacionado (cascade FK: jobs/transcripts/topics/…)."""
+    """Delete the video and EVERYTHING related (FK cascade: jobs/transcripts/topics/…)."""
     if s.get(VideoRow, video_id) is None:
         return False
     s.execute(delete(VideoRow).where(VideoRow.id == video_id))
@@ -170,7 +168,7 @@ def get_chat_signal(s: Session, video_id: str) -> ChatSignal | None:
     )
 
 
-# ------------------------- Topics / Moments -------------------------
+# ------------------------- Topics -------------------------
 
 
 def save_topics(s: Session, video_id: str, topics: list[Topic]) -> None:
@@ -201,39 +199,6 @@ def get_topic_rows(s: Session, video_id: str) -> list[TopicRow]:
 
 def set_topic_status(s: Session, topic_id: int, status: str) -> TopicRow | None:
     row = s.get(TopicRow, topic_id)
-    if row is not None:
-        row.status = status
-    return row
-
-
-def save_moments(s: Session, video_id: str, moments: list[CutMoment]) -> None:
-    s.execute(delete(CutMomentRow).where(CutMomentRow.video_id == video_id))
-    for i, m in enumerate(moments):
-        s.add(CutMomentRow(
-            video_id=video_id, ordinal=i, title=m.title, reason=m.reason,
-            start=m.start, end=m.end, score=m.score, status=m.status.value,
-        ))
-
-
-def get_moments(s: Session, video_id: str) -> list[CutMoment]:
-    rows = s.execute(
-        select(CutMomentRow).where(CutMomentRow.video_id == video_id).order_by(CutMomentRow.ordinal)
-    ).scalars()
-    return [
-        CutMoment(title=r.title, reason=r.reason, start=r.start, end=r.end,
-                  score=r.score, status=TopicStatus(r.status))
-        for r in rows
-    ]
-
-
-def get_moment_rows(s: Session, video_id: str) -> list[CutMomentRow]:
-    return list(s.execute(
-        select(CutMomentRow).where(CutMomentRow.video_id == video_id).order_by(CutMomentRow.ordinal)
-    ).scalars())
-
-
-def set_moment_status(s: Session, moment_id: int, status: str) -> CutMomentRow | None:
-    row = s.get(CutMomentRow, moment_id)
     if row is not None:
         row.status = status
     return row

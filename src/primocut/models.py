@@ -1,9 +1,9 @@
-"""Modelos de dados (pydantic), alinhados a docs/PRIMOCUT.md §"Modelo de dados".
+"""Data models (pydantic), aligned with docs/PRIMOCUT.md §"Data model".
 
-Convenções importantes da Fase 0:
-- Timestamps NUNCA são inventados pelo LLM. A análise seleciona ÍNDICES de
-  segmentos; `Transcript.resolve_span` converte esses índices em segundos.
-- Links do YouTube usam segundos inteiros: `...&t=SEGUNDOS`.
+Important conventions from Phase 0:
+- Timestamps are NEVER invented by the LLM. The analysis selects segment
+  INDICES; `Transcript.resolve_span` converts those indices into seconds.
+- YouTube links use integer seconds: `...&t=SECONDS`.
 """
 
 from __future__ import annotations
@@ -15,12 +15,12 @@ from pydantic import BaseModel, Field
 
 
 def youtube_url(video_id: str, ts: float) -> str:
-    """Link clicável para um instante do vídeo (segundos inteiros)."""
+    """Clickable link to a moment in the video (integer seconds)."""
     return f"https://youtube.com/watch?v={video_id}&t={int(ts)}"
 
 
 def format_timestamp(seconds: float) -> str:
-    """Formata segundos como H:MM:SS ou M:SS."""
+    """Format seconds as H:MM:SS or M:SS."""
     seconds = int(seconds)
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
@@ -39,7 +39,7 @@ class VideoStatus(str, Enum):
     STOPPED = "stopped"
 
 
-# Estados em que o vídeo está sendo processado ativamente (não deletável direto).
+# States in which the video is being actively processed (not directly deletable).
 ACTIVE_STATUSES = {
     VideoStatus.QUEUED.value,
     VideoStatus.DOWNLOADING.value,
@@ -49,9 +49,9 @@ ACTIVE_STATUSES = {
 
 
 class TopicStatus(str, Enum):
-    NEW = "novo"
-    MARKED = "marcado"
-    DISCARDED = "descartado"
+    NEW = "new"
+    MARKED = "marked"
+    DISCARDED = "discarded"
 
 
 class Video(BaseModel):
@@ -59,7 +59,7 @@ class Video(BaseModel):
     url: str
     title: str
     channel: str
-    duration: float  # segundos
+    duration: float  # seconds
     status: VideoStatus = VideoStatus.QUEUED
 
 
@@ -81,11 +81,11 @@ class Transcript(BaseModel):
         return self.segments[-1].end if self.segments else 0.0
 
     def resolve_span(self, start_index: int, end_index: int) -> tuple[float, float]:
-        """Converte um par de índices de segmento em (início_seg, fim_seg).
+        """Convert a pair of segment indices into (start_sec, end_sec).
 
-        Robusto contra o LLM: clampa índices fora do intervalo e ordena
-        se vierem invertidos. É aqui que garantimos que nenhum timestamp é
-        inventado — sempre derivamos de segmentos reais.
+        Robust against the LLM: clamps out-of-range indices and sorts them
+        if they come reversed. This is where we guarantee no timestamp is
+        invented — we always derive them from real segments.
         """
         if not self.segments:
             return 0.0, 0.0
@@ -96,7 +96,7 @@ class Transcript(BaseModel):
         return self.segments[lo].start, self.segments[hi].end
 
     def indexed_text(self) -> str:
-        """Renderiza os segmentos como `[i] M:SS texto`, entrada para o LLM."""
+        """Render the segments as `[i] M:SS text`, the LLM's input."""
         return "\n".join(
             f"[{s.index}] {format_timestamp(s.start)} {s.text}" for s in self.segments
         )
@@ -109,15 +109,15 @@ class ChatMessage(BaseModel):
 
 
 class MinuteBucket(BaseModel):
-    minute: int  # minuto da live (offset)
+    minute: int  # minute of the live (offset)
     msgs: int = 0
     laughs: int = 0
     emotes: int = 0
 
 
 class Peak(BaseModel):
-    ts: float  # segundos (início do minuto de pico)
-    intensity: float  # msgs/min no pico
+    ts: float  # seconds (start of the peak minute)
+    intensity: float  # msgs/min at the peak
     z: float  # z-score
 
 
@@ -136,21 +136,11 @@ class Topic(BaseModel):
     status: TopicStatus = TopicStatus.NEW
 
 
-class CutMoment(BaseModel):
-    title: str
-    reason: str
-    start: float
-    end: float
-    score: float = Field(ge=0.0, le=1.0)
-    status: TopicStatus = TopicStatus.NEW
-
-
 class Report(BaseModel):
     video: Video
     transcript_model: str
     chat_signal: ChatSignal | None = None
     topics: list[Topic] = Field(default_factory=list)
-    moments: list[CutMoment] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

@@ -1,10 +1,11 @@
-"""Lock distribuído de GPU (via Redis).
+"""Distributed GPU lock (via Redis).
 
-Garante que **apenas uma transcrição** use a GPU por vez — não importa quantos
-workers estejam rodando. É a "regra": subir mais workers é seguro por construção,
-porque a etapa de transcrição só entra quando obtém este lock.
+Guarantees that **only one transcription** uses the GPU at a time — no matter
+how many workers are running. That is the rule: bringing up more workers is safe
+by construction, because the transcription stage only enters once it obtains
+this lock.
 
-CLI e testes usam um no-op (`contextlib.nullcontext`) — só o worker precisa do lock.
+CLI and tests use a no-op (`contextlib.nullcontext`) — only the worker needs the lock.
 """
 
 from __future__ import annotations
@@ -15,14 +16,14 @@ GPU_LOCK_NAME = "primocut:gpu"
 
 
 def redis_gpu_lock(settings: Settings | None = None, connection=None):
-    """Context manager que serializa o uso da GPU entre processos/workers.
+    """Context manager that serializes GPU use across processes/workers.
 
-    `with redis_gpu_lock(...):` bloqueia até a GPU ficar livre, executa, e libera.
+    `with redis_gpu_lock(...):` blocks until the GPU is free, runs, and releases.
     """
     settings = settings or get_settings()
     from redis import Redis
 
     conn = connection or Redis.from_url(settings.redis_url)
-    # timeout = lease: se o detentor morrer, o lock é liberado depois desse tempo.
-    # blocking (default) = espera a vez; RQ job_timeout é o teto final da espera.
+    # timeout = lease: if the holder dies, the lock is released after this time.
+    # blocking (default) = wait your turn; RQ job_timeout is the final cap on the wait.
     return conn.lock(GPU_LOCK_NAME, timeout=settings.gpu_lock_timeout)

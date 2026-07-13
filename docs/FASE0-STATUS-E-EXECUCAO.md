@@ -1,198 +1,200 @@
-# PRIMOCUT — Fase 0: Status e Guia de Execução
+# PRIMOCUT — Phase 0: Status and Execution Guide
 
-> O que já foi implementado no Spike CLI e o passo a passo para você rodar sozinho.
-> Fonte de verdade: [`PRIMOCUT.md`](./PRIMOCUT.md). Plano: [`FASE0-SPIKE-CLI-PLANO.md`](./FASE0-SPIKE-CLI-PLANO.md).
+> What was implemented in the CLI spike and the step-by-step to run it yourself.
+> Source of truth: [`PRIMOCUT.md`](./PRIMOCUT.md). Plan: [`FASE0-SPIKE-CLI-PLANO.md`](./FASE0-SPIKE-CLI-PLANO.md).
 
-## 1. Status — o que foi entregue
+> **Historical note (pre-Phase 2):** Phase 0 originally shipped two independent LLM passes (macro
+> topics + fine-grained "cut moments"). The moments pass was later **removed** — the analysis now
+> has a single, uncapped macro-topics pass. Mentions of moments / `*.moments.json` below are history.
 
-Projeto Python modular (já preparado para a Fase 1), **58 testes passando**, construído em
-TDD (teste-primeiro). Todas as diretrizes técnicas do MVP foram atendidas na Fase 0.
+## 1. Status — what was delivered
 
-| Área | Módulo | O que faz | Testes |
+Modular Python project (already prepared for Phase 1), **58 tests passing** at the time, built with
+TDD (test-first). All the MVP technical guidelines were met in Phase 0.
+
+| Area | Module | What it does | Tests |
 |---|---|---|---|
-| Diagnóstico | `doctor.py` + `cli.py` | Valida GPU/CUDA (WSL2), FFmpeg, yt-dlp e `ANTHROPIC_API_KEY`; imprime o comando de correção de cada item ausente | `test_doctor.py` (10) |
-| Modelos | `models.py` | Modelos pydantic (`Video`, `Transcript`, `Segment`, `ChatSignal`, `Topic`, `CutMoment`, `Report`) + `resolve_span` e `youtube_url` | `test_models.py` (10) |
-| Chat (opcional) | `chat/signals.py` | Densidade msgs/min, risadas/emotes, **picos por z-score** | `test_chat_signals.py` (7) |
-| Chat (download) | `chat/downloader.py` | Replay via chat-downloader; ausência retorna `None` (não bloqueia o pipeline) | `test_downloaders.py` |
-| Transcrição | `transcription/engine.py` + `faster_whisper_engine.py` | Interface `TranscriptionEngine` (troca fácil na Fase 2) + faster-whisper `large-v3-turbo` em GPU (import preguiçoso) | `test_transcription_engine.py` (4) |
-| Janelamento | `analysis/windowing.py` | Divide transcrições longas em janelas com sobreposição, preservando índices globais | `test_windowing.py` (5) |
-| Análise LLM | `analysis/{llm,prompts,topics,moments,consolidate}.py` | **Duas passagens independentes**: tópicos macro (10–20) e detecção fina de momentos; consolida entre janelas | `test_analysis_selection.py` (6) |
-| Download áudio | `download/audio.py` | yt-dlp + FFmpeg → WAV 16kHz mono | `test_downloaders.py` (9 no total) |
-| Relatório | `report/markdown.py` | Metadados + atividade do chat (sparkline/tabela/picos) + 2 listas com links `&t=SEGUNDOS`, marcador 🔥 nos picos | `test_report_markdown.py` (5) |
-| Orquestração | `pipeline.py` | Encadeia as etapas com progresso; comando `run` | `test_pipeline.py` (2) |
+| Diagnostics | `doctor.py` + `cli.py` | Validates GPU/CUDA (WSL2), FFmpeg, yt-dlp and `ANTHROPIC_API_KEY`; prints the fix command for each missing item | `test_doctor.py` (10) |
+| Models | `models.py` | pydantic models (`Video`, `Transcript`, `Segment`, `ChatSignal`, `Topic`, `Report`) + `resolve_span` and `youtube_url` | `test_models.py` (10) |
+| Chat (optional) | `chat/signals.py` | msgs/min density, laughs/emotes, **z-score peaks** | `test_chat_signals.py` (7) |
+| Chat (download) | `chat/downloader.py` | Replay via chat-downloader; absence returns `None` (does not block the pipeline) | `test_downloaders.py` |
+| Transcription | `transcription/engine.py` + `faster_whisper_engine.py` | `TranscriptionEngine` interface (easy swap in Phase 2) + faster-whisper `large-v3-turbo` on GPU (lazy import) | `test_transcription_engine.py` (4) |
+| Windowing | `analysis/windowing.py` | Splits long transcripts into overlapping windows, preserving global indices | `test_windowing.py` (5) |
+| LLM analysis | `analysis/{llm,prompts,topics,consolidate}.py` | Macro-topics pass; consolidates across windows *(originally also a fine-grained moments pass, since removed)* | `test_analysis_selection.py` |
+| Audio download | `download/audio.py` | yt-dlp + FFmpeg → 16kHz mono WAV | `test_downloaders.py` |
+| Report | `report/markdown.py` | Metadata + chat activity (sparkline/table/peaks) + a topic list with `&t=SECONDS` links, 🔥 marker on peaks | `test_report_markdown.py` |
+| Orchestration | `pipeline.py` | Chains the stages with progress; the `run` command | `test_pipeline.py` |
 
-**Garantia anti-invenção de timestamps (diretriz #2):** o LLM recebe segmentos indexados
-(`[i] M:SS texto`) e devolve apenas `start_index`/`end_index`; o código resolve em segundos e
-**clampa índices fora do intervalo**. É impossível o LLM inventar um tempo.
+**Timestamp anti-invention guarantee (guideline #2):** the LLM receives indexed segments
+(`[i] M:SS text`) and returns only `start_index`/`end_index`; the code resolves them into seconds
+and **clamps out-of-range indices**. It is impossible for the LLM to invent a time.
 
-## 2. Pré-requisitos do ambiente
+## 2. Environment prerequisites
 
-Já verificado com `nvidia-smi`: **RTX 3070 Ti (8 GB) visível via CUDA no WSL2** ✅.
-Faltam (o `doctor` confirma): **FFmpeg**, **yt-dlp**, a **chave da API** e as libs pesadas de runtime.
+Already verified with `nvidia-smi`: **RTX 3070 Ti (8 GB) visible via CUDA on WSL2** ✅.
+Missing (the `doctor` confirms): **FFmpeg**, **yt-dlp**, the **API key** and the heavy runtime libs.
 
-> **Nuance deste ambiente:** falta o pacote `python3.13-venv` (sem `ensurepip`) e o `sudo` pede
-> senha, por isso a venv foi criada com `--without-pip` e as instalações são feitas apontando o
-> pip do sistema para o interpretador da venv. Os comandos abaixo já usam essa forma.
+> **Nuance of this environment:** the `python3.13-venv` package is missing (no `ensurepip`) and
+> `sudo` asks for a password, so the venv was created with `--without-pip` and installs are done by
+> pointing the system pip at the venv's interpreter. The commands below already use that form.
 
-## 3. Setup (ferramentas nativas do Python)
+## 3. Setup (native Python tooling)
 
-A venv (`.venv/`) e as dependências leves (typer, pydantic, anthropic, rich, pytest) já estão
-instaladas, e o pacote `primocut` já está registrado (`pip install -e .`). Para recriar do zero:
+The venv (`.venv/`) and the light dependencies (typer, pydantic, anthropic, rich, pytest) are
+already installed, and the `primocut` package is already registered (`pip install -e .`). To
+recreate from scratch:
 
 ```bash
 cd ~/projects/primocut
 
-# venv sem pip (porque falta python3.13-venv) + instalação via pip do SISTEMA.
-# Não ative a venv aqui: use /usr/bin/python3 (o python da venv não tem pip).
+# venv without pip (because python3.13-venv is missing) + install via the SYSTEM pip.
+# Do not activate the venv here: use /usr/bin/python3 (the venv's python has no pip).
 python3 -m venv .venv --without-pip
 /usr/bin/python3 -m pip --python .venv/bin/python install -r requirements-dev.txt
 /usr/bin/python3 -m pip --python .venv/bin/python install --no-deps -e .
 ```
 
-Se você instalar o pacote `python3.13-venv` (`sudo apt install python3.13-venv`), passa a valer
-o fluxo padrão: `python -m venv .venv && source .venv/bin/activate && pip install -r requirements-dev.txt && pip install -e .`.
+If you install the `python3.13-venv` package (`sudo apt install python3.13-venv`), the standard
+flow applies: `python -m venv .venv && source .venv/bin/activate && pip install -r requirements-dev.txt && pip install -e .`.
 
-## 4. Rodar os testes (por módulo, sem GPU/rede)
+## 4. Run the tests (per module, no GPU/network)
 
 ```bash
 source .venv/bin/activate
 
-pytest -q                                     # tudo (58 testes)
-pytest tests/test_doctor.py -v                # diagnóstico
-pytest tests/test_models.py -v                # modelos + youtube_url
-pytest tests/test_chat_signals.py -v          # z-score / picos
-pytest tests/test_windowing.py -v             # janelas com sobreposição
-pytest tests/test_analysis_selection.py -v    # seleção de índices (nunca inventa ts)
-pytest tests/test_report_markdown.py -v       # relatório
-pytest tests/test_transcription_engine.py -v  # interface de transcrição
-pytest tests/test_downloaders.py -v           # yt-dlp/chat mockados
-pytest tests/test_pipeline.py -v              # end-to-end com fakes
+pytest -q                                     # everything
+pytest tests/test_doctor.py -v                # diagnostics
+pytest tests/test_models.py -v                # models + youtube_url
+pytest tests/test_chat_signals.py -v          # z-score / peaks
+pytest tests/test_windowing.py -v             # overlapping windows
+pytest tests/test_analysis_selection.py -v    # index selection (never invents ts)
+pytest tests/test_report_markdown.py -v       # report
+pytest tests/test_transcription_engine.py -v  # transcription interface
+pytest tests/test_downloaders.py -v           # mocked yt-dlp/chat
+pytest tests/test_pipeline.py -v              # end-to-end with fakes
 ```
 
-## 5. Diagnóstico do ambiente (rode primeiro)
+## 5. Environment diagnostics (run this first)
 
 ```bash
 source .venv/bin/activate
 primocut doctor
 ```
 
-Mostra uma tabela com GPU/FFmpeg/yt-dlp/API key e, para cada falha, o comando de correção.
-Sai com código `1` enquanto houver pendências.
+Shows a table with GPU/FFmpeg/yt-dlp/API key and, for each failure, the fix command.
+Exits with code `1` while there are pending items.
 
-## 6. Habilitar o pipeline real
+## 6. Enable the real pipeline
 
-### 6.1. Dependências de sistema e de runtime
+### 6.1. System and runtime dependencies
 
 ```bash
-# FFmpeg (sistema) — precisa de sudo
+# FFmpeg (system) — needs sudo
 sudo apt update && sudo apt install -y ffmpeg
 
-# Libs pesadas de runtime (áudio, transcrição, chat) na venv.
-# IMPORTANTE: use o pip do SISTEMA (/usr/bin/python3). Se você chamar apenas
-# `python3` com a venv ATIVADA, ele usa o python da venv, que não tem pip
-# (erro: "No module named pip"). O caminho absoluto funciona sempre:
+# Heavy runtime libs (audio, transcription, chat) in the venv.
+# IMPORTANT: use the SYSTEM pip (/usr/bin/python3). If you call just `python3`
+# with the venv ACTIVATED, it uses the venv's python, which has no pip
+# (error: "No module named pip"). The absolute path always works:
 /usr/bin/python3 -m pip --python .venv/bin/python install faster-whisper yt-dlp chat-downloader
 
-# (Opcional) libs CUDA por pip, se o faster-whisper não achar cuBLAS/cuDNN no WSL:
+# (Optional) CUDA libs via pip, if faster-whisper cannot find cuBLAS/cuDNN on WSL:
 /usr/bin/python3 -m pip --python .venv/bin/python install nvidia-cublas-cu12 nvidia-cudnn-cu12
 ```
 
-### 6.2. Provedor de LLM e chave da API
+### 6.2. LLM provider and API key
 
-A análise é **agnóstica de provedor** (interface `SelectionLLM`). Suporta **Anthropic**
-(default), **OpenAI** e **OpenRouter**. Cada provedor cobra pela sua própria API (assinatura de
-consumidor — Claude Pro/Max ou ChatGPT Plus — **não** dá acesso à API; é preciso saldo/créditos).
+The analysis is **provider-agnostic** (`SelectionLLM` interface). It supports **Anthropic**
+(default), **OpenAI** and **OpenRouter**. Each provider bills its own API (a consumer subscription
+— Claude Pro/Max or ChatGPT Plus — does **not** grant API access; you need balance/credits).
 
 **Anthropic (default):**
 ```bash
 cp .env.example .env
-# edite .env: ANTHROPIC_API_KEY=sk-ant-...
+# edit .env: ANTHROPIC_API_KEY=sk-ant-...
 ```
-Modelo padrão `claude-sonnet-5` (troque com `PRIMOCUT_ANTHROPIC_MODEL` ou `-m`).
+Default model `claude-sonnet-5` (change it with `PRIMOCUT_ANTHROPIC_MODEL` or `-m`).
 
 **OpenAI:**
 ```bash
-/usr/bin/python3 -m pip --python .venv/bin/python install openai   # dep opcional
-# no .env:  OPENAI_API_KEY=sk-...  e  PRIMOCUT_LLM_PROVIDER=openai
+/usr/bin/python3 -m pip --python .venv/bin/python install openai   # optional dep
+# in .env:  OPENAI_API_KEY=sk-...  and  PRIMOCUT_LLM_PROVIDER=openai
 ```
-Modelo padrão `gpt-4o` (troque com `PRIMOCUT_OPENAI_MODEL` ou `-m`).
+Default model `gpt-4o` (change it with `PRIMOCUT_OPENAI_MODEL` or `-m`).
 
-**OpenRouter** (uma chave, acesso a muitos modelos; compatível com a API da OpenAI):
+**OpenRouter** (one key, access to many models; OpenAI-API compatible):
 ```bash
-/usr/bin/python3 -m pip --python .venv/bin/python install openai   # mesmo SDK
-# no .env:  OPENROUTER_API_KEY=sk-or-...  e  PRIMOCUT_LLM_PROVIDER=openrouter
+/usr/bin/python3 -m pip --python .venv/bin/python install openai   # same SDK
+# in .env:  OPENROUTER_API_KEY=sk-or-...  and  PRIMOCUT_LLM_PROVIDER=openrouter
 ```
-Modelo padrão `openai/gpt-4o-mini` — use os *slugs* do OpenRouter (`provedor/modelo`), ex.:
+Default model `openai/gpt-4o-mini` — use the OpenRouter *slugs* (`provider/model`), e.g.:
 `anthropic/claude-3.5-sonnet`, `google/gemini-2.0-flash-001`, `meta-llama/llama-3.3-70b-instruct`.
-Troque com `PRIMOCUT_OPENROUTER_MODEL` ou `-m`.
+Change it with `PRIMOCUT_OPENROUTER_MODEL` or `-m`.
 
-Você também pode escolher o provedor/modelo direto no comando, sem editar o `.env`:
+You can also choose the provider/model directly on the command, without editing `.env`:
 ```bash
 primocut run "<url>" -o report.md --provider openai --model gpt-4o-mini
 primocut run "<url>" -o report.md --provider anthropic --model claude-haiku-4-5
 primocut run "<url>" -o report.md --provider openrouter --model anthropic/claude-3.5-sonnet
 ```
 
-O `primocut doctor` valida a chave do **provedor selecionado** (`PRIMOCUT_LLM_PROVIDER`).
+`primocut doctor` validates the key of the **selected provider** (`PRIMOCUT_LLM_PROVIDER`).
 
-> **A análise exige tool use (function calling).** Se o modelo não suportar, o pipeline
-> falha com uma mensagem clara (`ToolCallError`) em vez de gerar relatório vazio.
-> Para achar modelos do OpenRouter compatíveis (inclusive **gratuitos**, sem precisar de saldo):
+> **The analysis requires tool use (function calling).** If the model does not support it, the
+> pipeline fails with a clear message (`ToolCallError`) instead of producing an empty report.
+> To find compatible OpenRouter models (including **free** ones, no balance needed):
 > ```bash
-> primocut models --free        # grátis + com ferramentas
-> primocut models               # todos com ferramentas
+> primocut models --free        # free + with tools
+> primocut models               # all with tools
 > ```
-> Ex. de modelo grátis com tools para testar: `meta-llama/llama-3.3-70b-instruct:free`.
-> (Modelos `:free` têm limites diários de requisição, mas sobram para validar o pipeline.)
+> Example free model with tools to try: `meta-llama/llama-3.3-70b-instruct:free`.
+> (The `:free` models have daily request limits, but plenty to validate the pipeline.)
 
-### 6.3. Confirmar que está tudo pronto
+### 6.3. Confirm everything is ready
 
 ```bash
 source .venv/bin/activate
-primocut doctor        # deve ficar tudo OK / "Ambiente pronto ✔"
+primocut doctor        # everything should be OK / "Environment ready ✔"
 ```
 
-### 6.4. Rodar de ponta a ponta
+### 6.4. Run end to end
 
 ```bash
-# Comece por uma live/vídeo CURTO para validar rápido (GPU, custo de API, qualidade)
+# Start with a SHORT live/video to validate quickly (GPU, API cost, quality)
 primocut run "https://www.youtube.com/watch?v=<ID>" -o report.md
 
-# Abra o relatório e clique nos timestamps
+# Open the report and click the timestamps
 ```
 
-## 6.5. Cache / retomada (não re-paga o que já deu certo)
+## 6.5. Cache / resume (never re-pays for what already succeeded)
 
-Cada etapa cara é persistida em `data/<video_id>.*` e reaproveitada em re-execuções:
-- `*.16k.wav` — áudio normalizado (não rebaixa).
-- `*.transcript.json` — transcrição (não re-transcreve).
-- `*.topics.json` — tópicos macro (não re-paga a análise macro).
-- `*.moments.json` — momentos de corte (não re-paga a análise fina).
+Each expensive stage is persisted in `data/<video_id>.*` and reused across re-runs:
+- `*.16k.wav` — normalized audio (does not re-download).
+- `*.transcript.json` — transcription (does not re-transcribe).
+- `*.topics.json` — macro topics (does not re-pay for the analysis).
 
-Os tópicos são gravados **antes** de a etapa de momentos rodar, então uma falha nos
-momentos não descarta os tópicos já pagos. Além disso, itens malformados na resposta
-do LLM são **ignorados com aviso** (nunca derrubam a análise inteira). Para forçar
-recomputar uma etapa, apague o arquivo de cache correspondente em `data/`.
+Malformed items in the LLM response are **ignored with a warning** (they never tear down the whole
+analysis). To force a recompute of a stage, delete the corresponding cache file in `data/`.
 
-## 6.6. Resiliência / fallbacks
+## 6.6. Resilience / fallbacks
 
-Cada etapa tem estratégia de recuperação e o pipeline **degrada em vez de abortar** (gera o melhor
-relatório possível, marcando o que falhou numa seção **"⚠️ Execução degradada"**). Só aborta quando
-é impossível continuar (sem áudio ou sem transcrição). Catálogo completo: [`FALLBACKS.md`](./FALLBACKS.md).
-Env vars relacionadas: `PRIMOCUT_RETRY_*`, `PRIMOCUT_WHISPER_COMPUTE_FALLBACKS`, `PRIMOCUT_YTDLP_PLAYER_CLIENTS`.
+Each stage has a recovery strategy and the pipeline **degrades instead of aborting** (produces the
+best possible report, flagging what failed in a **"⚠️ Degraded run"** section). It only aborts when
+it is impossible to continue (no audio or no transcription). Full catalog: [`FALLBACKS.md`](./FALLBACKS.md).
+Related env vars: `PRIMOCUT_RETRY_*`, `PRIMOCUT_WHISPER_COMPUTE_FALLBACKS`, `PRIMOCUT_YTDLP_PLAYER_CLIENTS`.
 
-## 7. Dicas de primeira execução
+## 7. First-run tips
 
-- O primeiro `run` baixa o modelo `large-v3-turbo` (alguns GB) na primeira vez — depois fica em cache.
-- Se a VRAM de 8 GB apertar, troque o `compute_type`:
+- The first `run` downloads the `large-v3-turbo` model (a few GB) the first time — then it is cached.
+- If the 8 GB of VRAM get tight, change the `compute_type`:
   `export PRIMOCUT_WHISPER_COMPUTE_TYPE=int8_float16`.
-- Ajuste de janelas da análise (para lives de 3–4h): `PRIMOCUT_WINDOW_TARGET_SECONDS`,
-  `PRIMOCUT_WINDOW_OVERLAP_SECONDS`. Threshold de pico do chat: `PRIMOCUT_CHAT_ZSCORE_THRESHOLD`.
-- Se o download falhar, atualize o yt-dlp (quebra com frequência):
+- Analysis window tuning (for 3-4h lives): `PRIMOCUT_WINDOW_TARGET_SECONDS`,
+  `PRIMOCUT_WINDOW_OVERLAP_SECONDS`. Chat peak threshold: `PRIMOCUT_CHAT_ZSCORE_THRESHOLD`.
+- If the download fails, update yt-dlp (it breaks frequently):
   `/usr/bin/python3 -m pip --python .venv/bin/python install -U yt-dlp`.
-- O chat é opcional: se a live não tiver replay, o relatório mostra "Sem replay de chat" e o
-  restante do pipeline segue normalmente.
+- Chat is optional: if the live has no replay, the report shows "No chat replay" and the rest of the
+  pipeline continues normally.
 
-## 8. O que fica para as próximas fases
-Fila (RQ+Redis), banco (SQLite), API (FastAPI), web UI, marcação/exportação de cortes, limpeza
-de áudios e a renderização automática de clipes (Fase 2) — nada disso entra na Fase 0.
+## 8. What is left for later phases
+Queue (RQ+Redis), database (SQLite), API (FastAPI), web UI, cut marking/export, audio cleanup and
+automatic clip rendering (Phase 2) — none of that is part of Phase 0.

@@ -1,8 +1,8 @@
-"""Janelamento de transcrições longas com sobreposição (diretriz técnica #3).
+"""Windowing of long transcripts with overlap (technical guideline #3).
 
-Lives de 3-4h excedem o contexto útil do LLM. Particionamos os segmentos em
-janelas por duração-alvo, com sobreposição, mantendo os ÍNDICES GLOBAIS de
-segmento — essenciais para o LLM selecionar spans e para depois consolidar.
+3-4h lives exceed the LLM's useful context. We partition the segments into
+windows by target duration, with overlap, keeping the GLOBAL segment INDICES —
+essential for the LLM to select spans and for later consolidation.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ def make_windows(
     target_seconds: float,
     overlap_seconds: float,
 ) -> list[Window]:
-    """Divide os segmentos em janelas [t, t+target) deslizando por (target-overlap)."""
+    """Split the segments into windows [t, t+target) sliding by (target-overlap)."""
     segments = transcript.segments
     if not segments:
         return []

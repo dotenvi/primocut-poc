@@ -1,61 +1,64 @@
-# PRIMOCUT — Resumo da Fase 0 (Spike CLI) — concluída ✅
+# PRIMOCUT — Phase 0 summary (CLI spike) — completed ✅
 
-> Handoff para orquestração. Fonte de verdade do produto: [`PRIMOCUT.md`](./PRIMOCUT.md).
-> Guia de execução: [`FASE0-STATUS-E-EXECUCAO.md`](./FASE0-STATUS-E-EXECUCAO.md).
-> Catálogo de resiliência: [`FALLBACKS.md`](./FALLBACKS.md). Plano: [`FASE0-SPIKE-CLI-PLANO.md`](./FASE0-SPIKE-CLI-PLANO.md).
+> Handoff for orchestration. Product source of truth: [`PRIMOCUT.md`](./PRIMOCUT.md).
+> Execution guide: [`FASE0-STATUS-E-EXECUCAO.md`](./FASE0-STATUS-E-EXECUCAO.md).
+> Resilience catalog: [`FALLBACKS.md`](./FALLBACKS.md). Plan: [`FASE0-SPIKE-CLI-PLANO.md`](./FASE0-SPIKE-CLI-PLANO.md).
 
-**Objetivo:** validar, via CLI, o pipeline URL de live → áudio → transcrição → chat → tópicos em
-Markdown; provar GPU no WSL2, qualidade de segmentação (tópicos macro vs. momentos finos) e
-detecção de picos do chat.
+**Goal:** validate, via the CLI, the pipeline live URL → audio → transcription → chat → topics in
+Markdown; prove the GPU on WSL2, the segmentation quality (macro topics) and chat peak detection.
 
-## Estado
-- **Concluída.** Pipeline roda ponta a ponta; testado num vídeo real de ~33 min (transcrição de
-  914 segmentos em ~82s na RTX 3070 Ti). Suíte de testes 100% verde.
+> **Note (pre-Phase 2):** Phase 0 originally explored a second, fine-grained "cut moments" pass in
+> addition to the macro topics. That second pass was later **discontinued** — the analysis now has a
+> single macro-topics pass, with no fixed cap on the number of topics.
 
-## Stack / ambiente
-- Python nativo (**venv + pip + requirements**, sem uv — decisão do usuário). No WSL2 a venv foi
-  criada `--without-pip` e instala via `/usr/bin/python3 -m pip --python .venv/bin/python`
-  (falta o pacote `python3.13-venv`).
-- yt-dlp (áudio) → FFmpeg (WAV 16kHz mono) → **faster-whisper `large-v3-turbo` GPU** → LLM
-  (tool use) → relatório Markdown.
-- CUDA no WSL2: libs `nvidia-cublas-cu12`/`nvidia-cudnn-cu12` via pip, pré-carregadas no processo.
+## State
+- **Completed.** The pipeline runs end to end; tested on a real ~33-min video (transcription of
+  914 segments in ~82s on the RTX 3070 Ti). Test suite 100% green.
 
-## Entregas (arquitetura modular, pensada p/ Fase 1)
-- **CLI** (`typer`): `doctor` (diagnóstico GPU/FFmpeg/yt-dlp/chave/SDK), `run` (pipeline),
-  `models` (lista modelos OpenRouter com tool use, inclusive grátis).
-- **Transcrição** atrás da interface `TranscriptionEngine` (troca fácil p/ WhisperX na Fase 2).
-- **Análise LLM = 2 passagens independentes**: tópicos macro (10–20) e detecção fina de momentos.
-- **Regra de ouro respeitada**: o LLM **nunca inventa timestamps** — seleciona *índices de
-  segmento* (tool use forçado); o código resolve em segundos e **clampa** índices inválidos.
-- **Janelamento** com sobreposição p/ lives longas (3–4h) + consolidação entre janelas.
-- **Chat opcional**: picos por z-score (msgs/min), risadas/emotes; ausência de replay não bloqueia.
-- **Relatório Markdown**: metadados, atividade do chat (sparkline+tabela+picos), 2 listas com
-  **links clicáveis `&t=SEGUNDOS`**, marcador 🔥 em tópicos/momentos que coincidem com picos.
-- **Modelos** em pydantic; **logging estruturado** com progresso por etapa.
+## Stack / environment
+- Native Python (**venv + pip + requirements**, no uv — user decision). On WSL2 the venv was
+  created `--without-pip` and installs via `/usr/bin/python3 -m pip --python .venv/bin/python`
+  (the `python3.13-venv` package is missing).
+- yt-dlp (audio) → FFmpeg (16kHz mono WAV) → **faster-whisper `large-v3-turbo` GPU** → LLM
+  (tool use) → Markdown report.
+- CUDA on WSL2: `nvidia-cublas-cu12`/`nvidia-cudnn-cu12` libs via pip, preloaded into the process.
 
-## Multi-provedor de LLM
-- **Anthropic** (default, `claude-sonnet-5`), **OpenAI** (`gpt-4o`), **OpenRouter** (compatível
-  OpenAI; slugs `provedor/modelo`). Seleção por `PRIMOCUT_LLM_PROVIDER` ou flags `--provider/--model`.
+## Deliverables (modular architecture, designed for Phase 1)
+- **CLI** (`typer`): `doctor` (GPU/FFmpeg/yt-dlp/key/SDK diagnostics), `run` (pipeline),
+  `models` (lists OpenRouter models with tool use, including free ones).
+- **Transcription** behind the `TranscriptionEngine` interface (easy swap for WhisperX in Phase 2).
+- **LLM analysis = macro-topics pass**: segments the transcript into the subjects discussed.
+- **Golden rule respected**: the LLM **never invents timestamps** — it selects *segment indices*
+  (forced tool use); the code resolves them into seconds and **clamps** invalid indices.
+- **Windowing** with overlap for long lives (3-4h) + consolidation across windows.
+- **Optional chat**: peaks by z-score (msgs/min), laughs/emotes; a missing replay does not block.
+- **Markdown report**: metadata, chat activity (sparkline+table+peaks), a topic list with
+  **clickable `&t=SECONDS` links**, and a 🔥 marker on topics that coincide with peaks.
+- **Models** in pydantic; **structured logging** with per-stage progress.
 
-## Resiliência / fallbacks (implementados + testados)
-- **Degrada em vez de abortar**: gera o melhor relatório possível com seção "⚠️ Execução degradada";
-  só aborta em falha de áudio/transcrição (essenciais).
-- **Cache paga-uma-vez** em `data/<id>.*` (áudio, transcrição, tópicos, momentos) — nada já
-  concluído/pago é refeito.
-- Retry+backoff (erros transitórios); metadados degradam p/ `Video` mínimo; **player_client
-  fallback** no yt-dlp; **downgrade de compute_type** na GPU (float16→int8_float16→int8);
-  **chat fallback via yt-dlp `--live-chat`**; análise com retry por janela e **parcial preservado**
-  em falha permanente; leitura tolerante de respostas malformadas do LLM.
+## Multi-provider LLM
+- **Anthropic** (default, `claude-sonnet-5`), **OpenAI** (`gpt-4o`), **OpenRouter** (OpenAI-compatible;
+  `provider/model` slugs). Selection via `PRIMOCUT_LLM_PROVIDER` or the `--provider/--model` flags.
 
-## Como rodar
+## Resilience / fallbacks (implemented + tested)
+- **Degrades instead of aborting**: produces the best possible report with a "⚠️ Degraded run"
+  section; only aborts on an audio/transcription failure (the essential ones).
+- **Pay-once cache** in `data/<id>.*` (audio, transcript, topics) — nothing already
+  completed/paid for is redone.
+- Retry+backoff (transient errors); metadata degrades to a minimal `Video`; **player_client
+  fallback** in yt-dlp; **compute_type downgrade** on the GPU (float16→int8_float16→int8);
+  **chat fallback via yt-dlp `--live-chat`**; analysis with per-window retry and **partial preserved**
+  on a permanent failure; tolerant parsing of malformed LLM responses.
+
+## How to run
 ```bash
 source .venv/bin/activate
 primocut doctor
 primocut run "https://www.youtube.com/watch?v=<ID>" -o report.md
-# opcional: --provider openrouter --model meta-llama/llama-3.3-70b-instruct:free
+# optional: --provider openrouter --model meta-llama/llama-3.3-70b-instruct:free
 ```
 
-## Fora de escopo / próximos passos (Fase 1)
-Fila (RQ+Redis), banco (SQLite), API (FastAPI), web UI navegável, marcação/exportação de cortes,
-limpeza de áudios. Candidatos técnicos: cache incremental por janela; troca automática de provedor
-(hoje é só retry, por decisão); WhisperX na Fase 2.
+## Out of scope / next steps (Phase 1)
+Queue (RQ+Redis), database (SQLite), API (FastAPI), navigable web UI, cut marking/export,
+audio cleanup. Technical candidates: incremental per-window cache; automatic provider switching
+(today it is retry-only, by decision); WhisperX in Phase 2.

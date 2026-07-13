@@ -12,8 +12,8 @@
 <header class="topbar">
   <a href="#/" class="brand">PRIMOCUT</a>
   <nav>
-    <a href="#/">Enviar</a>
-    <a href="#/videos">Vídeos</a>
+    <a href="#/">Submit</a>
+    <a href="#/videos">Videos</a>
   </nav>
 </header>
 

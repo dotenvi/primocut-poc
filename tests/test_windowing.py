@@ -1,4 +1,4 @@
-"""Testes do janelamento com sobreposição sobre os segmentos da transcrição."""
+"""Tests for the overlapping windowing over the transcript segments."""
 
 from __future__ import annotations
 
@@ -35,11 +35,11 @@ def test_single_window_when_shorter_than_target():
 def test_windows_overlap_and_preserve_global_indices():
     t = _transcript(30)  # 300s total
     wins = make_windows(t, target_seconds=120, overlap_seconds=30)
-    # step = 90 -> starts em 0,90,180 (a de 180 já cobre até 300 e encerra)
+    # step = 90 -> starts at 0,90,180 (the one at 180 already covers up to 300 and ends)
     assert len(wins) == 3
-    # primeira janela: starts 0..110 -> índices 0..11
+    # first window: starts 0..110 -> indices 0..11
     assert wins[0].start_index == 0 and wins[0].end_index == 11
-    # segunda janela começa em 90 -> índice 9 (sobreposição de 9,10,11)
+    # second window starts at 90 -> index 9 (overlap of 9,10,11)
     assert wins[1].start_index == 9
     shared = set(s.index for s in wins[0].segments) & set(s.index for s in wins[1].segments)
     assert shared == {9, 10, 11}

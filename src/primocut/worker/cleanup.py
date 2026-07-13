@@ -1,8 +1,8 @@
-"""Limpeza de áudios antigos (retenção configurável).
+"""Cleanup of old audio files (configurable retention).
 
-Apaga SÓ arquivos de áudio em disco (`*.wav/*.m4a/*.mp3`) mais antigos que N dias.
-Transcrições, tópicos, momentos e sinais do chat vivem no banco e são
-**permanentes** — nunca são tocados aqui.
+Deletes ONLY audio files on disk (`*.wav/*.m4a/*.mp3`) older than N days.
+Transcripts, topics and chat signals live in the database and are
+**permanent** — they are never touched here.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ def cleanup_audio(
     *,
     now: float | None = None,
 ) -> list[Path]:
-    """Remove áudios com mtime além de `retention_days`. Retorna os apagados."""
+    """Remove audio files with mtime beyond `retention_days`. Returns the deleted ones."""
     data_dir = Path(data_dir)
     if not data_dir.exists():
         return []
@@ -37,13 +37,13 @@ def cleanup_audio(
                 p.unlink()
                 deleted.append(p)
     if deleted:
-        logger.info("Limpeza: %d áudio(s) removido(s) (retenção %dd).",
+        logger.info("Cleanup: %d audio file(s) removed (retention %dd).",
                     len(deleted), retention_days)
     return deleted
 
 
 def purge_video_files(data_dir: Path | str, video_id: str) -> list[Path]:
-    """Apaga TODOS os arquivos de um vídeo (áudio + caches JSON): `data/<id>.*`."""
+    """Delete ALL files for a video (audio + JSON caches): `data/<id>.*`."""
     data_dir = Path(data_dir)
     if not data_dir.exists():
         return []
@@ -53,18 +53,18 @@ def purge_video_files(data_dir: Path | str, video_id: str) -> list[Path]:
             p.unlink()
             deleted.append(p)
     if deleted:
-        logger.info("Purga: %d arquivo(s) de %s removido(s).", len(deleted), video_id)
+        logger.info("Purge: %d file(s) for %s removed.", len(deleted), video_id)
     return deleted
 
 
 def run_cleanup_job(settings: Settings | None = None) -> int:
-    """Entry point sem args para a fila/agendador."""
+    """Argument-free entry point for the queue/scheduler."""
     settings = settings or get_settings()
     return len(cleanup_audio(settings.data_dir, settings.audio_retention_days))
 
 
 def schedule_daily_cleanup(settings: Settings | None = None, cron: str = "0 4 * * *") -> None:
-    """Registra (idempotente) a limpeza diária no rq-scheduler."""
+    """Register (idempotent) the daily cleanup on rq-scheduler."""
     from redis import Redis
     from rq_scheduler import Scheduler
 
@@ -75,4 +75,4 @@ def schedule_daily_cleanup(settings: Settings | None = None, cron: str = "0 4 * 
         if job.func_name and job.func_name.endswith("run_cleanup_job"):
             scheduler.cancel(job)
     scheduler.cron(cron, func=run_cleanup_job, queue_name=settings.rq_queue)
-    logger.info("Limpeza diária agendada (%s).", cron)
+    logger.info("Daily cleanup scheduled (%s).", cron)

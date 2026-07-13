@@ -1,4 +1,4 @@
-"""Testes do catálogo de modelos do OpenRouter (fetch injetado, sem rede)."""
+"""Tests for the OpenRouter model catalog (injected fetch, no network)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ _SAMPLE = {
             "supported_parameters": ["tools"],
         },
         {
-            "id": "algum/modelo-free-sem-tools:free",
+            "id": "some/free-model-without-tools:free",
             "pricing": {"prompt": "0", "completion": "0"},
             "supported_parameters": ["temperature"],
         },
@@ -42,13 +42,13 @@ def test_filter_tools_only():
     ids = [r["id"] for r in rows]
     assert "openai/gpt-4o-mini" in ids
     assert "meta-llama/llama-3.3-70b-instruct:free" in ids
-    assert "algum/modelo-free-sem-tools:free" not in ids  # sem tools é excluído
+    assert "some/free-model-without-tools:free" not in ids  # no tools is excluded
 
 
 def test_filter_free_and_tools():
     rows = openrouter.filter_models(_SAMPLE["data"], free_only=True, tools_only=True)
     ids = [r["id"] for r in rows]
-    # único grátis E com tools
+    # the only one that is free AND has tools
     assert ids == ["meta-llama/llama-3.3-70b-instruct:free"]
     assert rows[0]["free"] is True and rows[0]["tools"] is True
 

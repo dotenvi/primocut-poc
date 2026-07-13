@@ -1,4 +1,4 @@
-"""Enfileiramento de vídeos na fila RQ."""
+"""Enqueueing of videos onto the RQ queue."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def enqueue_video(
     database=None,
     queue=None,
 ) -> dict:
-    """Valida a URL, (re)cria o Video (queued) + Job e enfileira o processamento."""
+    """Validate the URL, (re)create the Video (queued) + Job and enqueue processing."""
     settings = settings or get_settings()
     if database is None:
         from ..db import get_database
@@ -58,9 +58,9 @@ def reenqueue_video(
     database=None,
     queue=None,
 ) -> dict:
-    """Reprocessa um vídeo já existente (sem revalidar URL; reseta status→queued).
+    """Reprocess an existing video (without re-validating the URL; resets status→queued).
 
-    Idempotente: `process_video` pula etapas com artefato já no banco (cache).
+    Idempotent: `process_video` skips stages whose artifact is already in the database (cache).
     """
     settings = settings or get_settings()
     if database is None:
@@ -79,11 +79,11 @@ def reenqueue_video(
 
 
 class VideoBusyError(RuntimeError):
-    """Tentativa de deletar um vídeo que ainda está em processamento ativo."""
+    """Attempt to delete a video that is still being actively processed."""
 
 
 def _default_stopper(rq_job_id: str | None, settings: Settings, connection=None) -> None:
-    """Cancela o job RQ: `cancel` se enfileirado, SIGKILL no horse se rodando."""
+    """Cancel the RQ job: `cancel` if queued, SIGKILL the horse if running."""
     if not rq_job_id:
         return
     from redis import Redis
@@ -93,7 +93,7 @@ def _default_stopper(rq_job_id: str | None, settings: Settings, connection=None)
     try:
         job = Job.fetch(rq_job_id, connection=conn)
     except Exception:
-        return  # job já não existe
+        return  # job no longer exists
     try:
         status = job.get_status(refresh=True)
         if status == "started":
@@ -103,7 +103,7 @@ def _default_stopper(rq_job_id: str | None, settings: Settings, connection=None)
         else:
             job.cancel()
     except Exception as exc:  # best-effort
-        logger.warning("Falha ao parar o job %s: %s", rq_job_id, exc)
+        logger.warning("Failed to stop job %s: %s", rq_job_id, exc)
 
 
 def stop_video(
@@ -114,7 +114,7 @@ def stop_video(
     connection=None,
     stopper=None,
 ) -> dict:
-    """Interrompe o processamento de um vídeo (cancela o job) e marca `stopped`."""
+    """Interrupt a video's processing (cancel the job) and mark it `stopped`."""
     settings = settings or get_settings()
     if database is None:
         from ..db import get_database
@@ -137,7 +137,7 @@ def stop_video(
             repo.update_job(s, job_id, status="stopped")
         repo.set_video_status(s, video_id, VideoStatus.STOPPED)
 
-    logger.info("Vídeo %s interrompido.", video_id)
+    logger.info("Video %s interrupted.", video_id)
     return {"video_id": video_id, "status": VideoStatus.STOPPED.value}
 
 
@@ -150,7 +150,7 @@ def delete_video(
     stopper=None,
     force: bool = False,
 ) -> dict:
-    """Apaga TUDO sobre o vídeo (banco + arquivos). Recusa se estiver ativo (use stop antes)."""
+    """Delete EVERYTHING about the video (database + files). Refuses if active (stop it first)."""
     settings = settings or get_settings()
     if database is None:
         from ..db import get_database
@@ -172,13 +172,13 @@ def delete_video(
     if status in ACTIVE_STATUSES and not force:
         raise VideoBusyError(video_id)
 
-    (stopper or _default_stopper)(rq_id, settings, connection)  # garante que não roda mais
+    (stopper or _default_stopper)(rq_id, settings, connection)  # make sure it no longer runs
 
     with database.session() as s:
         repo.delete_video(s, video_id)
     files = purge_video_files(settings.data_dir, video_id)
 
-    logger.info("Vídeo %s deletado (%d arquivo(s)).", video_id, len(files))
+    logger.info("Video %s deleted (%d file(s)).", video_id, len(files))
     return {"video_id": video_id, "deleted_files": len(files)}
 
 
@@ -194,5 +194,5 @@ def _enqueue_job(database, queue, video_id: str, settings: Settings) -> dict:
     with database.session() as s:
         repo.update_job(s, job_id, rq_job_id=rq_job.id)
 
-    logger.info("Enfileirado %s (job %s, rq %s)", video_id, job_id, rq_job.id)
+    logger.info("Enqueued %s (job %s, rq %s)", video_id, job_id, rq_job.id)
     return {"video_id": video_id, "job_id": job_id, "rq_job_id": rq_job.id}

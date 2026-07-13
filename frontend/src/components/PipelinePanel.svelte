@@ -5,13 +5,13 @@
   export let status = 'queued'
   export let progress = 0
 
-  const badgeText = { done: 'Concluído', running: 'Processando', failed: 'Falhou', pending: 'Pendente' }
+  const badgeText = { done: 'Done', running: 'Processing', failed: 'Failed', pending: 'Pending' }
 
   $: steps = computeSteps(stage, status)
 </script>
 
 <article class="pipeline card">
-  <h3>Etapas da pipeline</h3>
+  <h3>Pipeline stages</h3>
 
   {#if status !== 'done'}
     <div class="pbar" title={`${progress}%`}>
@@ -27,7 +27,7 @@
   </div>
 
   <details class="pipe-details">
-    <summary>Mostrar detalhes</summary>
+    <summary>Show details</summary>
     <ul>
       {#each steps as s (s.key)}
         <li>

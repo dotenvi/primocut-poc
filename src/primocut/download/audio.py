@@ -1,7 +1,7 @@
-"""Download de áudio via yt-dlp e normalização para 16kHz mono com FFmpeg.
+"""Audio download via yt-dlp and normalization to 16kHz mono with FFmpeg.
 
-`fetch_metadata` e `download_audio` são wrappers finos sobre subprocess, para
-serem fáceis de mockar nos testes. `extract_video_id` é puro.
+`fetch_metadata` and `download_audio` are thin wrappers over subprocess, so they
+are easy to mock in tests. `extract_video_id` is pure.
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ from ..resilience import RetryPolicy, is_transient, retry
 
 logger = get_logger(__name__)
 
-# Invoca o yt-dlp pelo interpretador atual (`python -m yt_dlp`), assim funciona
-# mesmo quando o binário `.venv/bin/yt-dlp` não está no PATH.
+# Invoke yt-dlp through the current interpreter (`python -m yt_dlp`), so it works
+# even when the `.venv/bin/yt-dlp` binary is not on PATH.
 YTDLP = [sys.executable, "-m", "yt_dlp"]
 
-# IDs de vídeo do YouTube têm exatamente 11 caracteres deste alfabeto.
+# YouTube video IDs are exactly 11 characters from this alphabet.
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _YOUTUBE_HOSTS = {
     "youtube.com",
@@ -36,43 +36,43 @@ _YOUTUBE_HOSTS = {
 
 
 def extract_video_id(url: str) -> str:
-    """Extrai o ID do vídeo de uma URL do YouTube (watch?v=, youtu.be, /live/)."""
+    """Extract the video ID from a YouTube URL (watch?v=, youtu.be, /live/)."""
     parsed = urlparse(url)
     if parsed.hostname and "youtu.be" in parsed.hostname:
         return parsed.path.lstrip("/").split("/")[0]
     qs = parse_qs(parsed.query)
     if "v" in qs:
         return qs["v"][0]
-    # formatos /live/<id> ou /embed/<id>
+    # /live/<id> or /embed/<id> formats
     parts = [p for p in parsed.path.split("/") if p]
     if parts and parts[0] in {"live", "embed", "shorts"} and len(parts) > 1:
         return parts[1]
     if parts:
         return parts[-1]
-    raise ValueError(f"Não consegui extrair o ID do vídeo de: {url}")
+    raise ValueError(f"Could not extract the video ID from: {url}")
 
 
 def validate_youtube_url(url: str) -> str:
-    """Valida o formato do link e retorna a URL canônica do vídeo.
+    """Validate the link format and return the canonical video URL.
 
-    Aceita links de vídeo do YouTube (watch?v=, youtu.be, /live/, /shorts/) e
-    devolve `https://www.youtube.com/watch?v=<ID>`. Levanta ValueError com uma
-    mensagem clara quando o link não é um vídeo do YouTube reconhecível — o que
-    também rejeita URLs mal formadas (ex.: com contra-barras de escape do shell).
+    Accepts YouTube video links (watch?v=, youtu.be, /live/, /shorts/) and
+    returns `https://www.youtube.com/watch?v=<ID>`. Raises ValueError with a
+    clear message when the link is not a recognizable YouTube video — which also
+    rejects malformed URLs (e.g. with shell escape backslashes).
     """
     raw = (url or "").strip()
     if not raw:
-        raise ValueError("URL vazia.")
+        raise ValueError("Empty URL.")
 
     parsed = urlparse(raw)
     if parsed.scheme not in {"http", "https"}:
-        raise ValueError(f"A URL precisa começar com http:// ou https:// — recebido: {url!r}")
+        raise ValueError(f"The URL must start with http:// or https:// — got: {url!r}")
 
     host = (parsed.hostname or "").lower()
     if host not in _YOUTUBE_HOSTS:
         raise ValueError(
-            f"Não é um link do YouTube: {url!r}. "
-            "Use algo como https://www.youtube.com/watch?v=VIDEO_ID"
+            f"Not a YouTube link: {url!r}. "
+            "Use something like https://www.youtube.com/watch?v=VIDEO_ID"
         )
 
     try:
@@ -82,9 +82,9 @@ def validate_youtube_url(url: str) -> str:
 
     if not _VIDEO_ID_RE.match(video_id):
         raise ValueError(
-            f"Não encontrei um ID de vídeo válido (11 caracteres) em: {url!r}. "
-            "Confira se o link é de um vídeo (formato https://www.youtube.com/watch?v=VIDEO_ID) "
-            "e se não há caracteres de escape (contra-barras) colados por engano."
+            f"Could not find a valid video ID (11 characters) in: {url!r}. "
+            "Check that the link is a video (format https://www.youtube.com/watch?v=VIDEO_ID) "
+            "and that there are no escape characters (backslashes) pasted by mistake."
         )
 
     return f"https://www.youtube.com/watch?v={video_id}"
@@ -99,7 +99,7 @@ def _retry_policy(settings: Settings) -> RetryPolicy:
 
 
 def fetch_metadata(url: str, settings: Settings | None = None) -> Video:
-    """Coleta metadados via `yt-dlp -J` (sem baixar mídia), com retry transitório."""
+    """Collect metadata via `yt-dlp -J` (without downloading media), with transient retry."""
     settings = settings or get_settings()
 
     def _run() -> dict:
@@ -109,12 +109,12 @@ def fetch_metadata(url: str, settings: Settings | None = None) -> Video:
         )
         return json.loads(proc.stdout)
 
-    data = retry(_run, policy=_retry_policy(settings), is_retryable=is_transient, label="metadados")
+    data = retry(_run, policy=_retry_policy(settings), is_retryable=is_transient, label="metadata")
     return Video(
         id=data.get("id") or extract_video_id(url),
         url=data.get("webpage_url", url),
-        title=data.get("title", "(sem título)"),
-        channel=data.get("channel") or data.get("uploader", "(desconhecido)"),
+        title=data.get("title", "(no title)"),
+        channel=data.get("channel") or data.get("uploader", "(unknown)"),
         duration=float(data.get("duration") or 0.0),
         status=VideoStatus.DOWNLOADING,
     )
@@ -123,10 +123,10 @@ def fetch_metadata(url: str, settings: Settings | None = None) -> Video:
 def download_audio(
     url: str, out_dir: Path, *, video_id: str | None = None, settings: Settings | None = None
 ) -> Path:
-    """Baixa o áudio e normaliza para WAV 16kHz mono. Retorna o caminho do .wav.
+    """Download the audio and normalize it to 16kHz mono WAV. Returns the .wav path.
 
-    Resiliência: retry transitório (rede) + fallback de `player_client` do yt-dlp
-    (o extrator do YouTube quebra com frequência).
+    Resilience: transient retry (network) + yt-dlp `player_client` fallback
+    (the YouTube extractor breaks frequently).
     """
     settings = settings or get_settings()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -134,17 +134,17 @@ def download_audio(
     src_template = str(out_dir / f"{vid}.src.%(ext)s")
     normalized = out_dir / f"{vid}.16k.wav"
 
-    # Retomada: se o WAV normalizado já existe, reaproveita (evita rebaixar).
+    # Resume: if the normalized WAV already exists, reuse it (avoids re-downloading).
     if normalized.exists() and normalized.stat().st_size > 0:
-        logger.info("Reaproveitando áudio já baixado: %s", normalized)
+        logger.info("Reusing already-downloaded audio: %s", normalized)
         return normalized
 
     clients = [c.strip() for c in settings.ytdlp_player_clients.split(",") if c.strip()]
     attempts = [["--extractor-args", f"youtube:player_client={c}"] for c in clients] or [[]]
     policy = _retry_policy(settings)
 
-    # 1. yt-dlp baixa APENAS o melhor áudio comprimido (sem converter p/ WAV):
-    #    evita um passe de ffmpeg e um arquivo intermediário gigante (vários GB).
+    # 1. yt-dlp downloads ONLY the best compressed audio (without converting to WAV):
+    #    avoids one ffmpeg pass and a huge intermediate file (several GB).
     last_exc: Exception | None = None
     for extra in attempts:
         try:
@@ -154,41 +154,41 @@ def download_audio(
                      "-o", src_template, url],
                     check=True, stdin=subprocess.DEVNULL,
                 ),
-                policy=policy, is_retryable=is_transient, label="download áudio",
+                policy=policy, is_retryable=is_transient, label="audio download",
             )
             break
-        except Exception as exc:  # yt-dlp quebrou p/ este client → tenta o próximo
+        except Exception as exc:  # yt-dlp broke for this client → try the next one
             last_exc = exc
-            logger.warning("Download falhou (extractor-args=%s): %s", extra or "padrão", exc)
+            logger.warning("Download failed (extractor-args=%s): %s", extra or "default", exc)
     else:
         raise RuntimeError(
-            f"Falha ao baixar o áudio após {len(attempts)} configuração(ões) de yt-dlp. "
-            "Tente atualizar o yt-dlp ou ajustar PRIMOCUT_YTDLP_PLAYER_CLIENTS. "
-            f"Último erro: {last_exc}"
+            f"Failed to download the audio after {len(attempts)} yt-dlp configuration(s). "
+            "Try updating yt-dlp or adjusting PRIMOCUT_YTDLP_PLAYER_CLIENTS. "
+            f"Last error: {last_exc}"
         )
 
     src = _find_src(out_dir, vid)
 
-    # 2. Passe ÚNICO do FFmpeg: decodifica + reamostra p/ 16kHz mono.
-    #    `-stats` mostra progresso/velocidade em tempo real no log.
-    logger.info("Normalizando áudio para 16kHz mono (FFmpeg)…")
+    # 2. SINGLE FFmpeg pass: decode + resample to 16kHz mono.
+    #    `-stats` shows real-time progress/speed in the log.
+    logger.info("Normalizing audio to 16kHz mono (FFmpeg)…")
     subprocess.run(
-        # `-nostdin` + stdin=DEVNULL: sem isso, rodando em segundo plano (work-horse
-        # do RQ) o ffmpeg tenta ler o terminal, recebe SIGTTIN e fica SUSPENSO (T).
+        # `-nostdin` + stdin=DEVNULL: without this, running in the background (RQ
+        # work-horse) ffmpeg tries to read the terminal, gets SIGTTIN and STOPS (T).
         ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-stats", "-y",
          "-i", str(src), "-ar", "16000", "-ac", "1", str(normalized)],
         check=True, stdin=subprocess.DEVNULL,
     )
-    try:  # o comprimido não é mais necessário (o cache é o .16k.wav)
+    try:  # the compressed file is no longer needed (the cache is the .16k.wav)
         src.unlink()
     except OSError:
         pass
-    logger.info("Áudio normalizado: %s", normalized)
+    logger.info("Normalized audio: %s", normalized)
     return normalized
 
 
 def _find_src(out_dir: Path, vid: str) -> Path:
     matches = [p for p in out_dir.glob(f"{vid}.src.*") if p.is_file()]
     if not matches:
-        raise RuntimeError(f"yt-dlp não gerou o arquivo de áudio para {vid}.")
+        raise RuntimeError(f"yt-dlp did not produce the audio file for {vid}.")
     return matches[0]

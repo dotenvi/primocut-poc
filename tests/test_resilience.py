@@ -1,4 +1,4 @@
-"""Testes do módulo transversal de resiliência (retry/backoff/classificação)."""
+"""Tests for the cross-cutting resilience module (retry/backoff/classification)."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def test_retry_succeeds_after_transient_failures():
     result = retry(fn, policy=RetryPolicy(attempts=5, base_delay=1.0), is_retryable=is_transient, sleep=sleep)
     assert result == "ok"
     assert calls["n"] == 3
-    assert delays == [1.0, 2.0]  # backoff exponencial
+    assert delays == [1.0, 2.0]  # exponential backoff
 
 
 def test_retry_reraises_non_retryable_immediately():
@@ -48,7 +48,7 @@ def test_retry_reraises_non_retryable_immediately():
     delays, sleep = _recorder()
     with pytest.raises(_Permanent):
         retry(fn, policy=RetryPolicy(attempts=5), is_retryable=is_transient, sleep=sleep)
-    assert calls["n"] == 1  # não repetiu
+    assert calls["n"] == 1  # did not retry
     assert delays == []
 
 
@@ -63,7 +63,7 @@ def test_retry_exhausts_attempts_and_reraises():
     with pytest.raises(_Transient):
         retry(fn, policy=RetryPolicy(attempts=3, base_delay=1.0), is_retryable=is_transient, sleep=sleep)
     assert calls["n"] == 3
-    assert delays == [1.0, 2.0]  # dormiu entre as 3 tentativas (2 esperas)
+    assert delays == [1.0, 2.0]  # slept between the 3 attempts (2 waits)
 
 
 def test_backoff_is_capped_by_max_delay():
@@ -86,7 +86,7 @@ def test_backoff_is_capped_by_max_delay():
         (TimeoutError(), True),
         (urllib.error.URLError("x"), True),
         (ValueError("x"), False),
-        (FileNotFoundError(), False),  # binário ausente NÃO é transitório
+        (FileNotFoundError(), False),  # a missing binary is NOT transient
     ],
 )
 def test_is_transient(exc, expected):

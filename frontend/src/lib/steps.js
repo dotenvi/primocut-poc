@@ -1,15 +1,14 @@
-// Etapas canônicas da pipeline (na ordem de execução). `match` casa com o
-// texto do `stage` que o backend reporta.
+// Canonical pipeline steps (in execution order). `match` matches the `stage`
+// text reported by the backend.
 export const STEPS = [
-  { key: 'metadata', label: 'Metadados', match: 'metadados' },
-  { key: 'audio', label: 'Download do áudio', match: 'download' },
-  { key: 'transcription', label: 'Transcrição', match: 'transcri' },
+  { key: 'metadata', label: 'Metadata', match: 'metadata' },
+  { key: 'audio', label: 'Audio download', match: 'audio' },
+  { key: 'transcription', label: 'Transcription', match: 'transcription' },
   { key: 'chat', label: 'Chat', match: 'chat' },
-  { key: 'topics', label: 'Tópicos macro', match: 'tópicos' },
-  { key: 'moments', label: 'Momentos de corte', match: 'momentos' },
+  { key: 'topics', label: 'Macro topics', match: 'topics' },
 ]
 
-// Deriva o estado de cada etapa a partir do stage/status atuais.
+// Derive each step's state from the current stage/status.
 // state ∈ 'done' | 'running' | 'failed' | 'pending'
 export function computeSteps(stage, status) {
   const s = (stage || '').toLowerCase()
@@ -20,7 +19,7 @@ export function computeSteps(stage, status) {
     if (status === 'done') {
       state = 'done'
     } else if (current < 0) {
-      state = 'pending' // ainda na fila
+      state = 'pending' // still queued
     } else if (i < current) {
       state = 'done'
     } else if (i === current) {

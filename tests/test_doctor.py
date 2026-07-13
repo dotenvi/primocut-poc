@@ -1,4 +1,4 @@
-"""Testes do comando de diagnóstico (doctor), com probes mockados."""
+"""Tests for the diagnostics command (doctor), with mocked probes."""
 
 from __future__ import annotations
 

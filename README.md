@@ -1,65 +1,65 @@
-# PRIMOCUT — Fase 0 (Spike CLI)
+# PRIMOCUT
 
-CLI que recebe a URL de uma live do YouTube e produz um relatório em Markdown com os
-tópicos discutidos. Pipeline: **áudio → chat replay → transcrição → análise por LLM**.
+CLI + local web app that takes the URL of a YouTube live and produces a report with the
+topics discussed. Pipeline: **audio → chat replay → transcription → LLM analysis**.
 
-Fonte de verdade: [`docs/PRIMOCUT.md`](docs/PRIMOCUT.md).
-**Fase 1 (MVP web): [`docs/FASE1-MVP.md`](docs/FASE1-MVP.md).**
-Resumo da Fase 0 (handoff): [`docs/FASE0-RESUMO.md`](docs/FASE0-RESUMO.md).
-Plano da Fase 0: [`docs/FASE0-SPIKE-CLI-PLANO.md`](docs/FASE0-SPIKE-CLI-PLANO.md).
-Guia de execução: [`docs/FASE0-STATUS-E-EXECUCAO.md`](docs/FASE0-STATUS-E-EXECUCAO.md).
-Catálogo de fallbacks: [`docs/FALLBACKS.md`](docs/FALLBACKS.md).
+Source of truth: [`docs/PRIMOCUT.md`](docs/PRIMOCUT.md).
+**Phase 1 (web MVP): [`docs/FASE1-MVP.md`](docs/FASE1-MVP.md).**
+Phase 0 summary (handoff): [`docs/FASE0-RESUMO.md`](docs/FASE0-RESUMO.md).
+Phase 0 plan: [`docs/FASE0-SPIKE-CLI-PLANO.md`](docs/FASE0-SPIKE-CLI-PLANO.md).
+Execution guide: [`docs/FASE0-STATUS-E-EXECUCAO.md`](docs/FASE0-STATUS-E-EXECUCAO.md).
+Fallback catalog: [`docs/FALLBACKS.md`](docs/FALLBACKS.md).
 
-## Setup (ferramentas nativas do Python)
+## Setup (native Python tooling)
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt   # runtime + pytest
-pip install -e .                      # registra o comando `primocut`
+pip install -e .                      # registers the `primocut` command
 ```
 
-> **Nuance deste ambiente (WSL2):** se `python -m venv` falhar com
-> `ensurepip is not available`, falta o pacote `python3.13-venv` (precisa de
-> `sudo apt install python3.13-venv`). Sem sudo, dá para usar só stdlib + o pip
-> do sistema: crie a venv sem pip e instale apontando o pip para o interpretador dela:
+> **Nuance of this environment (WSL2):** if `python -m venv` fails with
+> `ensurepip is not available`, the `python3.13-venv` package is missing (needs
+> `sudo apt install python3.13-venv`). Without sudo, you can use just stdlib + the system
+> pip: create the venv without pip and install by pointing pip at its interpreter:
 > ```bash
 > python3 -m venv .venv --without-pip
 > python3 -m pip --python .venv/bin/python install -r requirements-dev.txt
 > python3 -m pip --python .venv/bin/python install --no-deps -e .
 > ```
 
-Dependências de sistema (validadas pelo `doctor`): **FFmpeg** e **yt-dlp**, além da
-`ANTHROPIC_API_KEY`. Copie `.env.example` para `.env` e preencha a chave.
+System dependencies (validated by `doctor`): **FFmpeg** and **yt-dlp**, plus the
+`ANTHROPIC_API_KEY`. Copy `.env.example` to `.env` and fill in the key.
 
-## Diagnóstico do ambiente (rode primeiro)
+## Environment diagnostics (run this first)
 
 ```bash
 primocut doctor
 ```
 
-Valida GPU/CUDA (WSL2), FFmpeg, yt-dlp e a chave da API — e imprime o comando de
-correção para cada item ausente.
+Validates GPU/CUDA (WSL2), FFmpeg, yt-dlp and the API key — and prints the fix command
+for each missing item.
 
-## Executar o pipeline (CLI, Fase 0)
+## Run the pipeline (CLI, Phase 0)
 
 ```bash
 primocut run "https://www.youtube.com/watch?v=<ID>" -o report.md
 ```
 
-## App web (Fase 1)
+## Web app (Phase 1)
 
-Precisa de Redis (`sudo apt install redis-server` ou `docker run -p 6379:6379 redis`).
+Needs Redis (`sudo apt install redis-server` or `docker run -p 6379:6379 redis`).
 
 ```bash
-cd frontend && npm install && npm run build && cd ..   # build da UI (uma vez)
-primocut worker    # processa a fila (terminal 1)
-primocut serve     # API + UI em http://127.0.0.1:8000 (terminal 2)
+cd frontend && npm install && npm run build && cd ..   # build the UI (once)
+primocut worker    # processes the queue (terminal 1)
+primocut serve     # API + UI at http://127.0.0.1:8000 (terminal 2)
 ```
 
-Detalhes em [`docs/FASE1-MVP.md`](docs/FASE1-MVP.md).
+Details in [`docs/FASE1-MVP.md`](docs/FASE1-MVP.md).
 
-## Testes por módulo (isolados, sem GPU/rede)
+## Per-module tests (isolated, no GPU/network)
 
 ```bash
 pytest tests/test_doctor.py -v
@@ -69,5 +69,5 @@ pytest tests/test_windowing.py -v
 pytest tests/test_analysis_selection.py -v
 pytest tests/test_report_markdown.py -v
 pytest tests/test_transcription_engine.py -v
-pytest -v   # tudo
+pytest -v   # everything
 ```

@@ -1,4 +1,4 @@
-"""Testes do worker RQ (execução inline, sem Redis real)."""
+"""Tests for the RQ worker (inline execution, no real Redis)."""
 
 from __future__ import annotations
 
@@ -42,9 +42,7 @@ class _FakeEngine:
 
 class _FakeLLM:
     def select(self, *, system, user, tool, tool_name):
-        if tool_name == "record_topics":
-            return {"topics": [{"title": "A", "summary": "s", "start_index": 0, "end_index": 1, "score": 0.7}]}
-        return {"moments": [{"title": "P", "reason": "r", "start_index": 2, "end_index": 2, "score": 0.9}]}
+        return {"topics": [{"title": "A", "summary": "s", "start_index": 0, "end_index": 1, "score": 0.7}]}
 
 
 def _seed_video(db, vid="v1"):
@@ -64,7 +62,7 @@ def _common(tmp_path):
         settings=_settings(tmp_path),
         engine=_FakeEngine(),
         llm=_FakeLLM(),
-        gpu_lock=contextlib.nullcontext(),  # sem Redis nos testes
+        gpu_lock=contextlib.nullcontext(),  # no Redis in tests
         metadata_fn=lambda url: Video(id="v1", url=url, title="T", channel="C", duration=30.0),
         download_audio_fn=lambda url, out_dir, video_id=None: Path("/tmp/fake.wav"),
         download_chat_fn=lambda url: None,
@@ -75,7 +73,7 @@ def test_process_video_success_transitions(tmp_path):
     db = _db(tmp_path)
     _seed_video(db)
     res = process_video("v1", database=db, **_common(tmp_path))
-    assert res["topics"] == 1 and res["moments"] == 1
+    assert res["topics"] == 1
     with db.session() as s:
         assert repo.get_video(s, "v1").status == "done"
         job = repo.latest_job(s, "v1")
@@ -105,26 +103,26 @@ def test_gpu_lock_acquired_once_during_transcription(tmp_path):
     common = _common(tmp_path)
     common["gpu_lock"] = lock
     process_video("v1", database=db, **common)
-    assert lock.entered == 1 and lock.exited == 1  # adquirido/liberado só na transcrição
+    assert lock.entered == 1 and lock.exited == 1  # acquired/released only during transcription
 
 
 def test_reenqueue_is_idempotent_and_respects_cache(tmp_path):
     db = _db(tmp_path)
     _seed_video(db)
-    process_video("v1", database=db, **_common(tmp_path))  # 1ª: persiste tudo
+    process_video("v1", database=db, **_common(tmp_path))  # 1st: persists everything
 
-    # 2ª execução: engine/LLM/download que explodem se chamados → cache deve pular tudo
+    # 2nd run: engine/LLM/download that blow up if called → cache must skip everything
     class _BoomEngine:
         name = "boom"
         def transcribe(self, *a, **k):
-            raise AssertionError("não deveria re-transcrever")
+            raise AssertionError("should not re-transcribe")
 
     class _BoomLLM:
         def select(self, **k):
-            raise AssertionError("não deveria re-chamar o LLM")
+            raise AssertionError("should not re-call the LLM")
 
     def _boom_dl(url, out_dir, video_id=None):
-        raise AssertionError("não deveria re-baixar áudio")
+        raise AssertionError("should not re-download audio")
 
     process_video(
         "v1", database=db, settings=_settings(tmp_path),
@@ -133,7 +131,7 @@ def test_reenqueue_is_idempotent_and_respects_cache(tmp_path):
         download_audio_fn=_boom_dl, download_chat_fn=lambda url: None,
     )
     with db.session() as s:
-        assert repo.get_video(s, "v1").status == "done"  # concluiu sem reprocessar
+        assert repo.get_video(s, "v1").status == "done"  # finished without reprocessing
 
 
 def test_process_video_essential_failure_sets_error(tmp_path):
@@ -141,7 +139,7 @@ def test_process_video_essential_failure_sets_error(tmp_path):
     _seed_video(db)
 
     def _boom_dl(url, out_dir, video_id=None):
-        raise RuntimeError("sem áudio")
+        raise RuntimeError("no audio")
 
     common = _common(tmp_path)
     common["download_audio_fn"] = _boom_dl
@@ -158,15 +156,15 @@ def test_degradation_is_persisted_in_job_warnings(tmp_path):
 
     class _PermLLM:
         def select(self, **k):
-            raise RuntimeError("crédito acabou")  # permanente
+            raise RuntimeError("out of credit")  # permanent
 
     common = _common(tmp_path)
     common["llm"] = _PermLLM()
     process_video("v1", database=db, **common)
     with db.session() as s:
         job = repo.latest_job(s, "v1")
-        assert job.status == "finished"          # degradou, não abortou
-        assert job.warnings                       # avisos persistidos
+        assert job.status == "finished"          # degraded, did not abort
+        assert job.warnings                       # warnings persisted
         assert repo.get_video(s, "v1").status == "done"
 
 

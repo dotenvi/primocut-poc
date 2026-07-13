@@ -1,7 +1,7 @@
-"""Abstração TranscriptionEngine (diretriz técnica #1).
+"""TranscriptionEngine abstraction (technical guideline #1).
 
-O resto do sistema depende só desta interface, permitindo trocar faster-whisper
-por WhisperX (Fase 2) sem tocar em pipeline/análise/relatório.
+The rest of the system depends only on this interface, allowing faster-whisper
+to be swapped for WhisperX (Phase 2) without touching pipeline/analysis/report.
 """
 
 from __future__ import annotations
@@ -16,11 +16,11 @@ from ..models import Transcript
 class TranscriptionEngine(Protocol):
     @property
     def name(self) -> str:
-        """Identificador do engine/modelo (vai para Transcript.model e ao relatório)."""
+        """Engine/model identifier (goes to Transcript.model and the report)."""
         ...
 
     def transcribe(
         self, audio_path: Path, *, video_id: str, language: str = "pt"
     ) -> Transcript:
-        """Transcreve o áudio e devolve um Transcript com segmentos indexados."""
+        """Transcribe the audio and return a Transcript with indexed segments."""
         ...

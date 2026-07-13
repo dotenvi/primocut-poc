@@ -1,7 +1,7 @@
-"""Configuração central do PRIMOCUT (pydantic-settings).
+"""Central PRIMOCUT configuration (pydantic-settings).
 
-Lê de variáveis de ambiente e de um arquivo `.env`. A chave da Anthropic usa o
-nome padrão `ANTHROPIC_API_KEY`; as demais opções usam o prefixo `PRIMOCUT_`.
+Reads from environment variables and a `.env` file. The Anthropic key uses the
+standard name `ANTHROPIC_API_KEY`; the other options use the `PRIMOCUT_` prefix.
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    # --- LLM / análise ---
-    # Provedor da análise: "anthropic", "openai" ou "openrouter".
+    # --- LLM / analysis ---
+    # Analysis provider: "anthropic", "openai" or "openrouter".
     llm_provider: str = "anthropic"
 
     anthropic_api_key: str | None = Field(
@@ -33,57 +33,57 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_model: str = "gpt-4o"
 
-    # OpenRouter é compatível com a API da OpenAI (usa o SDK `openai` com base_url).
+    # OpenRouter is OpenAI-API compatible (uses the `openai` SDK with a base_url).
     openrouter_api_key: str | None = Field(
         default=None, validation_alias="OPENROUTER_API_KEY"
     )
     openrouter_model: str = "openai/gpt-4o-mini"
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
-    # --- Transcrição (faster-whisper) ---
+    # --- Transcription (faster-whisper) ---
     whisper_model: str = "large-v3-turbo"
     whisper_device: str = "cuda"
     whisper_compute_type: str = "float16"
     whisper_language: str = "pt"
-    # Sequência de degradação do compute_type na GPU (cabe na VRAM de 8 GB?).
+    # GPU compute_type degradation sequence (does it fit in 8 GB of VRAM?).
     whisper_compute_fallbacks: str = "float16,int8_float16,int8"
 
-    # --- Resiliência (retry/backoff das etapas) ---
+    # --- Resilience (stage retry/backoff) ---
     retry_attempts: int = 3
     retry_base_delay: float = 1.0
     retry_max_delay: float = 30.0
 
     # --- Download (yt-dlp) ---
-    # Lista de player_client a tentar quando o extrator do YouTube quebra
-    # (vazio = usa o padrão do yt-dlp). Ex.: "android,web".
+    # List of player_client values to try when the YouTube extractor breaks
+    # (empty = use yt-dlp's default). E.g. "android,web".
     ytdlp_player_clients: str = ""
 
-    # --- Windowing da análise ---
+    # --- Analysis windowing ---
     window_target_seconds: float = 20 * 60.0
     window_overlap_seconds: float = 60.0
 
     # --- Chat ---
     chat_zscore_threshold: float = 2.0
 
-    # --- Armazenamento / retenção ---
+    # --- Storage / retention ---
     data_dir: Path = Path("data")
     audio_retention_days: int = 7
 
-    # --- Fase 1: banco, fila, servidor ---
+    # --- Phase 1: database, queue, server ---
     db_path: Path = Path("data/primocut.db")
     redis_url: str = "redis://localhost:6379/0"
     rq_queue: str = "primocut"
-    # Timeout do job RQ (s). O pipeline pode levar dezenas de min (download do
-    # modelo na 1ª vez + transcrição de lives longas). Default folgado: 6h.
+    # RQ job timeout (s). The pipeline can take tens of minutes (first-time model
+    # download + transcription of long lives). Generous default: 6h.
     rq_job_timeout: int = 6 * 3600
-    # Lock de GPU: garante 1 transcrição por vez, independentemente de quantos
-    # workers rodem. `timeout` = lease (auto-libera se o worker morrer); deve ser
-    # maior que a transcrição mais longa possível.
+    # GPU lock: guarantees 1 transcription at a time, regardless of how many
+    # workers run. `timeout` = lease (auto-releases if the worker dies); it must
+    # be longer than the longest possible transcription.
     gpu_lock_timeout: int = 2 * 3600
     serve_host: str = "127.0.0.1"
     serve_port: int = 8000
 
 
 def get_settings() -> Settings:
-    """Instancia as configurações lendo ambiente/.env no momento da chamada."""
+    """Instantiate the settings reading environment/.env at call time."""
     return Settings()

@@ -1,7 +1,7 @@
-"""Detecção de sinais do chat: densidade por minuto, risadas/emotes e picos.
+"""Chat signal detection: density per minute, laughs/emotes and peaks.
 
-Puro e determinístico (sem rede/GPU): fácil de testar isoladamente. Picos são
-detectados por z-score da densidade de mensagens/minuto (diretriz técnica #4).
+Pure and deterministic (no network/GPU): easy to test in isolation. Peaks are
+detected by z-score of the messages-per-minute density (technical guideline #4).
 """
 
 from __future__ import annotations
@@ -11,10 +11,10 @@ import statistics
 
 from ..models import ChatMessage, ChatSignal, MinuteBucket, Peak
 
-# Risadas em PT-BR: "kkkk", "hahaha", "rsrsrs", "huehue", "aiai"...
+# PT-BR laughs: "kkkk", "hahaha", "rsrsrs", "huehue", "aiai"...
 _LAUGH_RE = re.compile(r"(k{3,}|(?:ha){2,}|(?:rs){2,}|(?:hue){1,}|(?:ai){2,}|lol)", re.IGNORECASE)
 
-# Emoji unicode (faixas mais comuns) — usados como marcador de reação/emote.
+# Unicode emoji (most common ranges) — used as a reaction/emote marker.
 _EMOJI_RE = re.compile(
     "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF❤]"
 )
@@ -34,7 +34,7 @@ def compute_chat_signal(
     *,
     threshold: float = 2.0,
 ) -> ChatSignal:
-    """Agrega mensagens em buckets por minuto e detecta picos por z-score."""
+    """Aggregate messages into per-minute buckets and detect peaks by z-score."""
     if not messages:
         return ChatSignal(video_id=video_id, per_minute=[], peaks=[])
 

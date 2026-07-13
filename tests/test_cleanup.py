@@ -1,4 +1,4 @@
-"""Testes da limpeza de áudios (retenção)."""
+"""Tests for the audio cleanup (retention)."""
 
 from __future__ import annotations
 
@@ -29,11 +29,11 @@ def test_deletes_old_audio_keeps_recent(tmp_path):
 
     assert set(deleted) == {old, old_raw}
     assert not old.exists() and not old_raw.exists()
-    assert recent.exists()  # áudio recente preservado
+    assert recent.exists()  # recent audio preserved
 
 
 def test_never_touches_transcript_or_json(tmp_path):
-    # artefatos permanentes: JSON de cache e o banco
+    # permanent artifacts: cache JSON and the database
     (tmp_path / "abc.transcript.json").write_text("{}")
     (tmp_path / "abc.topics.json").write_text("[]")
     audio = tmp_path / "abc.16k.wav"
@@ -49,20 +49,20 @@ def test_never_touches_transcript_or_json(tmp_path):
 
     cleanup_audio(tmp_path, retention_days=7)
 
-    assert not audio.exists()  # áudio antigo removido
-    assert (tmp_path / "abc.transcript.json").exists()  # JSON permanece
+    assert not audio.exists()  # old audio removed
+    assert (tmp_path / "abc.transcript.json").exists()  # JSON stays
     assert (tmp_path / "abc.topics.json").exists()
-    with db.session() as s:  # transcrição no banco intacta
+    with db.session() as s:  # transcript in the database intact
         assert repo.get_transcript(s, "abc") is not None
 
 
 def test_missing_dir_is_safe(tmp_path):
-    assert cleanup_audio(tmp_path / "nao-existe", retention_days=7) == []
+    assert cleanup_audio(tmp_path / "does-not-exist", retention_days=7) == []
 
 
 def test_now_override_controls_cutoff(tmp_path):
     a = tmp_path / "a.wav"
     a.write_bytes(b"x")
-    os.utime(a, (1000.0, 1000.0))  # mtime bem antigo (epoch 1000)
-    # com now logo após, retenção 0 dias → apaga
+    os.utime(a, (1000.0, 1000.0))  # very old mtime (epoch 1000)
+    # with now just after, retention 0 days → deletes
     assert cleanup_audio(tmp_path, retention_days=0, now=2000.0) == [a]

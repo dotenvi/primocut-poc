@@ -1,7 +1,7 @@
-"""Modelos ORM (SQLAlchemy 2.0), alinhados ao modelo de dados do PRIMOCUT.md.
+"""ORM models (SQLAlchemy 2.0), aligned with the data model in PRIMOCUT.md.
 
-Áudio é arquivo em disco (retenção temporária); transcript/topics/moments/chat_signal
-são permanentes (linhas aqui).
+Audio is a file on disk (temporary retention); transcript/topics/chat_signal
+are permanent (rows here).
 """
 
 from __future__ import annotations
@@ -84,21 +84,7 @@ class TopicRow(Base):
     start: Mapped[float] = mapped_column(Float)
     end: Mapped[float] = mapped_column(Float)
     score: Mapped[float] = mapped_column(Float, default=0.0)
-    status: Mapped[str] = mapped_column(String, default="novo")
-
-
-class CutMomentRow(Base):
-    __tablename__ = "cut_moments"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    video_id: Mapped[str] = mapped_column(ForeignKey("videos.id", ondelete="CASCADE"))
-    ordinal: Mapped[int] = mapped_column(Integer, default=0)
-    title: Mapped[str] = mapped_column(String)
-    reason: Mapped[str] = mapped_column(Text, default="")
-    start: Mapped[float] = mapped_column(Float)
-    end: Mapped[float] = mapped_column(Float)
-    score: Mapped[float] = mapped_column(Float, default=0.0)
-    status: Mapped[str] = mapped_column(String, default="novo")
+    status: Mapped[str] = mapped_column(String, default="new")
 
 
 class SchemaMigration(Base):

@@ -1,4 +1,4 @@
-"""Camada de persistência (SQLite via SQLAlchemy 2.0)."""
+"""Persistence layer (SQLite via SQLAlchemy 2.0)."""
 
 from .session import Database, get_database
 

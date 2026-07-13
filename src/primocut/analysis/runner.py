@@ -1,9 +1,9 @@
-"""Execução resiliente das janelas de análise.
+"""Resilient execution of the analysis windows.
 
-Cada janela chama o LLM com retry (erros transitórios). Se uma janela falhar de
-forma permanente (crédito, auth, sem tool use) ou esgotar os retries, a etapa é
-**encerrada mantendo o que já foi coletado** (parcial) e registra um aviso — o
-pipeline então degrada o relatório em vez de abortar.
+Each window calls the LLM with retry (transient errors). If a window fails
+permanently (credit, auth, no tool use) or exhausts its retries, the stage is
+**ended keeping whatever was already collected** (partial) and a warning is
+recorded — the pipeline then degrades the report instead of aborting.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def select_windows(
     label: str,
     warnings: list[str] | None = None,
 ) -> Iterator[dict[str, Any]]:
-    """Gera o payload de cada janela, com retry; encerra (parcial) em falha permanente."""
+    """Yield each window's payload, with retry; end (partial) on permanent failure."""
     policy = RetryPolicy(
         attempts=settings.retry_attempts,
         base_delay=settings.retry_base_delay,
@@ -38,7 +38,7 @@ def select_windows(
     )
     total = len(windows)
     for i, window in enumerate(windows):
-        logger.info("%s: janela %d/%d", label, i + 1, total)
+        logger.info("%s: window %d/%d", label, i + 1, total)
         try:
             payload = retry(
                 lambda w=window: llm.select(
@@ -46,12 +46,12 @@ def select_windows(
                 ),
                 policy=policy,
                 is_retryable=is_transient,
-                label=f"{label} janela {i + 1}",
+                label=f"{label} window {i + 1}",
             )
-        except Exception as exc:  # noqa: BLE001 — degradação controlada
-            msg = f"{label}: interrompido na janela {i + 1}/{total} — {type(exc).__name__}: {exc}"
+        except Exception as exc:  # noqa: BLE001 — controlled degradation
+            msg = f"{label}: stopped at window {i + 1}/{total} — {type(exc).__name__}: {exc}"
             logger.warning(msg)
             if warnings is not None:
                 warnings.append(msg)
-            return  # mantém o parcial já coletado
+            return  # keep the partial already collected
         yield payload

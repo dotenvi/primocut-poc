@@ -1,76 +1,77 @@
 # PRIMOCUT
 
-**Pri**nt **Mo**ney with **Cut** — automação de canais de cortes do YouTube.
+**Pri**nt **Mo**ney with **Cut** — automation of YouTube clip channels.
 
-## Visão
+## Vision
 
-A aplicação recebe a URL de uma live do YouTube (podcast, stream), baixa o áudio e o replay do chat, transcreve com timestamps e usa IA para gerar um índice de tópicos do que foi falado. O usuário lê o relatório — em vez de assistir 3-4 horas de vídeo — e identifica os trechos que quer transformar em cortes.
+The application receives the URL of a YouTube live (podcast, stream), downloads the audio and the chat replay, transcribes it with timestamps and uses AI to generate an index of the topics that were discussed. The user reads the report — instead of watching 3-4 hours of video — and identifies the passages they want to turn into clips.
 
-## Escopo do MVP
+## MVP scope
 
-Entregar, a partir de uma URL, um relatório navegável contendo:
+Deliver, from a URL, a navigable report containing:
 
-- Tópicos em ordem cronológica: título, resumo curto, timestamp de início/fim, score de potencial de corte.
-- Gráfico de atividade do chat ao longo da live (picos de mensagens = candidatos a corte).
-- Transcrição completa pesquisável, com timestamps clicáveis (`https://youtube.com/watch?v=ID&t=SEGUNDOS`).
-- Marcação de tópicos como "corte" e exportação da lista de timestamps.
+- Topics in chronological order: title, short summary, start/end timestamp, clip-potential score.
+- Chart of chat activity throughout the live (message peaks = clip candidates).
+- Full searchable transcript, with clickable timestamps (`https://youtube.com/watch?v=ID&t=SECONDS`).
+- Marking topics as "cut" and exporting the timestamp list.
 
-**Fora do MVP:** corte/renderização automática de clipes, geração de título/thumbnail, upload para YouTube, formato vertical, multi-usuário, autenticação, deploy remoto.
+**Out of the MVP:** automatic clip cutting/rendering, title/thumbnail generation, upload to YouTube, vertical format, multi-user, authentication, remote deploy.
 
-## Contexto de execução
+## Execution context
 
-- Roda 100% local: Debian via WSL2, single-user, sem auth.
-- GPU: NVIDIA RTX 3070 Ti (8 GB VRAM) via CUDA no WSL2. Driver fica no Windows; dentro do WSL usar bibliotecas CUDA/cuDNN via pip (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`). Validar com `nvidia-smi`.
-- Lives em PT-BR apenas (modelos distil do Whisper são English-only — não usar).
+- Runs 100% locally: Debian via WSL2, single-user, no auth.
+- GPU: NVIDIA RTX 3070 Ti (8 GB VRAM) via CUDA on WSL2. The driver lives on Windows; inside WSL use CUDA/cuDNN libraries via pip (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`). Validate with `nvidia-smi`.
+- PT-BR lives only (the distil Whisper models are English-only — do not use).
 
-## Arquitetura
+## Architecture
 
 ```
-[Web UI] → [FastAPI] → [Fila (RQ + Redis)] → Workers:
-                                              1. Download do áudio (yt-dlp, apenas áudio)
-                                              2. Download do chat replay (chat-downloader)
-                                              3. Transcrição (faster-whisper, GPU)
-                                              4. Análise (LLM → tópicos + timestamps,
-                                                 cruzando sinais do chat)
-[SQLite] ← metadados, jobs, transcrições, tópicos, sinais do chat
-[Disco local] ← áudios (retenção temporária)
+[Web UI] → [FastAPI] → [Queue (RQ + Redis)] → Workers:
+                                              1. Audio download (yt-dlp, audio only)
+                                              2. Chat replay download (chat-downloader)
+                                              3. Transcription (faster-whisper, GPU)
+                                              4. Analysis (LLM → topics + timestamps,
+                                                 cross-referencing chat signals)
+[SQLite] ← metadata, jobs, transcripts, topics, chat signals
+[Local disk] ← audio files (temporary retention)
 ```
 
-## Stack (decidida)
+## Stack (decided)
 
-| Camada | Tecnologia |
+| Layer | Technology |
 |---|---|
-| Download de áudio | yt-dlp (extrair só áudio, normalizar com FFmpeg para 16kHz mono) |
-| Download do chat | chat-downloader (fallback: yt-dlp live_chat) |
-| Transcrição | faster-whisper, modelo `large-v3-turbo`, compute em GPU |
-| Análise/tópicos | LLM via API (Anthropic) |
+| Audio download | yt-dlp (extract audio only, normalize with FFmpeg to 16kHz mono) |
+| Chat download | chat-downloader (fallback: yt-dlp live_chat) |
+| Transcription | faster-whisper, model `large-v3-turbo`, compute on GPU |
+| Analysis/topics | LLM via API (Anthropic) |
 | API | FastAPI |
-| Fila | RQ + Redis |
-| Banco | SQLite |
-| Frontend | Svelte (SPA compilada com Vite), servida como estático pelo FastAPI |
-| Dependências | Python padrão: venv + pip + requirements.txt (sem uv/poetry) |
+| Queue | RQ + Redis |
+| Database | SQLite |
+| Frontend | Svelte (SPA compiled with Vite), served as static files by FastAPI |
+| Dependencies | Standard Python: venv + pip + requirements.txt (no uv/poetry) |
 
-## Modelo de dados
+## Data model
 
-- **Video**: id, url, título, canal, duração, status (queued/downloading/transcribing/analyzing/done/error)
-- **Transcript**: video_id, segmentos [{início, fim, texto}], idioma, modelo usado
-- **ChatSignal**: video_id, série temporal [{minuto, msgs, risadas, emotes}], picos detectados [{ts, intensidade}]
-- **Topic**: video_id, título, resumo, ts_início, ts_fim, score, status (novo/marcado/descartado)
-- **Job**: video_id, etapa, progresso, erro
+- **Video**: id, url, title, channel, duration, status (queued/downloading/transcribing/analyzing/done/error)
+- **Transcript**: video_id, segments [{start, end, text}], language, model used
+- **ChatSignal**: video_id, time series [{minute, msgs, laughs, emotes}], detected peaks [{ts, intensity}]
+- **Topic**: video_id, title, summary, ts_start, ts_end, score, status (new/marked/discarded)
+- **Job**: video_id, stage, progress, error
 
-## Diretrizes técnicas
+## Technical guidelines
 
-1. **TranscriptionEngine como interface**: o worker de transcrição deve ficar atrás de uma abstração para permitir trocar faster-whisper por WhisperX (Fase 2) sem tocar no resto do sistema.
-2. **Timestamps nunca inventados**: a análise por LLM deve referenciar exclusivamente timestamps existentes na transcrição. Estruturar o prompt/dados de forma que o LLM selecione segmentos, não gere números.
-3. **Transcrições longas**: lives de 3-4h excedem contexto útil do LLM — processar em janelas com sobreposição e consolidar os tópicos.
-4. **Chat é sinal opcional**: nem toda live preserva o replay do chat; ausência não pode bloquear o pipeline. Detecção de picos por densidade de mensagens/minuto (z-score) e marcadores de reação (risadas "KKKK", emotes).
-5. **Retenção**: áudio apagado por job de limpeza após N dias (configurável, default 7); transcrições, tópicos e sinais do chat são permanentes.
-6. **Jobs assíncronos**: nenhum processamento pesado dentro de request HTTP; tudo via fila com status/progresso persistidos.
-7. **yt-dlp atualizado**: quebra com frequência por mudanças do YouTube; fixar processo de atualização fácil.
+1. **Project language is English**: every comment, docstring, identifier, log/error message and user-facing string is written in English, and so is the product documentation. Any new code follows the same rule.
+2. **TranscriptionEngine as an interface**: the transcription worker must sit behind an abstraction so faster-whisper can be swapped for WhisperX (Phase 2) without touching the rest of the system.
+3. **Timestamps are never invented**: the LLM analysis must reference exclusively timestamps that exist in the transcript. Structure the prompt/data so the LLM selects segments, rather than generating numbers.
+4. **Long transcripts**: 3-4h lives exceed the LLM's useful context — process them in overlapping windows and consolidate the topics.
+5. **Chat is an optional signal**: not every live preserves the chat replay; its absence must not block the pipeline. Peak detection by message density per minute (z-score) and reaction markers (laughs "KKKK", emotes).
+6. **Retention**: audio is deleted by a cleanup job after N days (configurable, default 7); transcripts, topics and chat signals are permanent.
+7. **Asynchronous jobs**: no heavy processing inside an HTTP request; everything goes through the queue with persisted status/progress.
+8. **yt-dlp kept up to date**: it breaks frequently due to YouTube changes; pin an easy update process.
 
 ## Roadmap
 
-- **Fase 0 — Spike CLI (atual):** script de linha de comando: URL → áudio → transcrição → chat → tópicos em Markdown. Objetivo: validar GPU no WSL2, qualidade da segmentação (tópicos macro vs. detecção fina de momentos) e detecção de picos do chat.
-- **Fase 1 — MVP:** fila + banco + web UI + relatório navegável + marcação/exportação de cortes + limpeza de áudios.
-- **Fase 2 — Corte assistido:** geração automática de clipes com FFmpeg; avaliar WhisperX (timestamps por palavra + diarização).
-- **Fase 3 — Publicação:** títulos/descrições via IA, formato vertical, upload via YouTube API, multi-usuário.
+- **Phase 0 — CLI spike:** command-line script: URL → audio → transcription → chat → topics in Markdown. Goal: validate GPU on WSL2, the quality of the macro-topic segmentation, and chat peak detection.
+- **Phase 1 — MVP:** queue + database + web UI + navigable report + cut marking/export + audio cleanup.
+- **Phase 2 — Assisted cutting:** automatic clip generation with FFmpeg; evaluate WhisperX (word-level timestamps + diarization).
+- **Phase 3 — Publishing:** AI titles/descriptions, vertical format, upload via the YouTube API, multi-user.

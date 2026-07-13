@@ -1,6 +1,6 @@
-"""Testes do contrato TranscriptionEngine e do mapeamento do faster-whisper.
+"""Tests for the TranscriptionEngine contract and the faster-whisper mapping.
 
-Nenhum modelo é baixado nem a GPU é usada: injetamos um modelo fake.
+No model is downloaded and no GPU is used: we inject a fake model.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ class _FakeModel:
 
 
 class FakeEngine:
-    """Engine mínimo para provar que o Protocol é satisfazível/injetável."""
+    """Minimal engine proving the Protocol is satisfiable/injectable."""
 
     name = "fake-engine"
 
@@ -60,15 +60,15 @@ def test_faster_whisper_engine_satisfies_protocol():
 
 def test_transcribe_maps_segments_with_sequential_indices():
     raw = [
-        _RawSeg(0.0, 4.0, " olá "),
-        _RawSeg(4.0, 9.0, "tudo bem"),
-        _RawSeg(9.0, 15.0, "vamos começar"),
+        _RawSeg(0.0, 4.0, " hello "),
+        _RawSeg(4.0, 9.0, "how are you"),
+        _RawSeg(9.0, 15.0, "let's begin"),
     ]
     engine = FasterWhisperEngine(model=_FakeModel(raw))
     t = engine.transcribe(Path("/tmp/a.wav"), video_id="vid1")
 
     assert [s.index for s in t.segments] == [0, 1, 2]
-    assert t.segments[0].text == "olá"  # trim aplicado
+    assert t.segments[0].text == "hello"  # trim applied
     assert t.segments[2].end == 15.0
     assert t.video_id == "vid1"
     assert t.language == "pt"
@@ -102,8 +102,8 @@ def test_load_model_degrades_compute_type_on_gpu_failure():
     )
     model = engine._load_model()
     assert isinstance(model, _FakeModel)
-    assert tried == ["float16", "int8_float16"]  # parou no primeiro que funcionou
-    assert engine.degradation_warnings  # registrou a degradação
+    assert tried == ["float16", "int8_float16"]  # stopped at the first that worked
+    assert engine.degradation_warnings  # recorded the degradation
 
 
 def test_load_model_raises_when_all_compute_types_fail():
@@ -119,5 +119,5 @@ def test_load_model_raises_when_all_compute_types_fail():
                           whisper_compute_fallbacks="float16,int8"),
         model_factory=factory,
     )
-    with pytest.raises(RuntimeError, match="todos os compute_types"):
+    with pytest.raises(RuntimeError, match="every compute_type"):
         engine._load_model()

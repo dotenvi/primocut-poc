@@ -1,9 +1,8 @@
-"""Diagnóstico do ambiente (`primocut doctor`).
+"""Environment diagnostics (`primocut doctor`).
 
-Valida o que a Fase 0 precisa para rodar de ponta a ponta:
-GPU/CUDA visível no WSL2, FFmpeg, yt-dlp e a chave da API Anthropic.
-Cada check retorna um resultado com o comando de correção quando falha.
-Não instala nada — apenas reporta.
+Validates what Phase 0 needs to run end to end: GPU/CUDA visible under WSL2,
+FFmpeg, yt-dlp and the Anthropic API key. Each check returns a result with the
+fix command when it fails. It installs nothing — it only reports.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ class DiagnosticsReport(BaseModel):
 
 
 def check_gpu() -> CheckResult:
-    """GPU NVIDIA visível via `nvidia-smi` (driver no Windows, exposto ao WSL2)."""
+    """NVIDIA GPU visible via `nvidia-smi` (driver on Windows, exposed to WSL2)."""
     name = "GPU / CUDA (WSL2)"
     try:
         proc = subprocess.run(
@@ -46,19 +45,19 @@ def check_gpu() -> CheckResult:
         return CheckResult(
             name=name,
             ok=False,
-            detail="nvidia-smi não encontrado",
-            fix="Instale o driver NVIDIA no Windows e habilite o WSL2 GPU; "
-            "confirme com `nvidia-smi`.",
+            detail="nvidia-smi not found",
+            fix="Install the NVIDIA driver on Windows and enable WSL2 GPU; "
+            "confirm with `nvidia-smi`.",
         )
     except subprocess.TimeoutExpired:
-        return CheckResult(name=name, ok=False, detail="nvidia-smi travou (timeout)")
+        return CheckResult(name=name, ok=False, detail="nvidia-smi hung (timeout)")
 
     if proc.returncode != 0:
         return CheckResult(
             name=name,
             ok=False,
             detail=(proc.stderr or proc.stdout or "returncode != 0").strip(),
-            fix="Verifique o driver NVIDIA e o suporte a GPU no WSL2.",
+            fix="Check the NVIDIA driver and WSL2 GPU support.",
         )
     return CheckResult(name=name, ok=True, detail=proc.stdout.strip().splitlines()[0] if proc.stdout.strip() else "ok")
 
@@ -71,30 +70,30 @@ def check_ffmpeg() -> CheckResult:
     return CheckResult(
         name=name,
         ok=False,
-        detail="não encontrado no PATH",
+        detail="not found on PATH",
         fix="sudo apt install ffmpeg",
     )
 
 
 def check_ytdlp() -> CheckResult:
     name = "yt-dlp"
-    # O pipeline usa `python -m yt_dlp`, então o que importa é o módulo estar
-    # instalado no interpretador atual — não o binário estar no PATH.
+    # The pipeline uses `python -m yt_dlp`, so what matters is the module being
+    # installed in the current interpreter — not the binary being on PATH.
     if importlib.util.find_spec("yt_dlp") is not None:
-        return CheckResult(name=name, ok=True, detail="módulo yt_dlp instalado")
+        return CheckResult(name=name, ok=True, detail="yt_dlp module installed")
     path = shutil.which("yt-dlp")
     if path:
         return CheckResult(name=name, ok=True, detail=path)
     return CheckResult(
         name=name,
         ok=False,
-        detail="módulo yt_dlp não instalado",
+        detail="yt_dlp module not installed",
         fix="/usr/bin/python3 -m pip --python .venv/bin/python install -U yt-dlp",
     )
 
 
 def check_api_key(settings: Settings) -> CheckResult:
-    """Valida a chave do provedor de LLM selecionado (`llm_provider`)."""
+    """Validate the key of the selected LLM provider (`llm_provider`)."""
     provider = settings.llm_provider.lower()
     if provider == "openai":
         env, key = "OPENAI_API_KEY", settings.openai_api_key
@@ -105,39 +104,39 @@ def check_api_key(settings: Settings) -> CheckResult:
 
     name = f"{env} ({provider})"
     if key:
-        return CheckResult(name=name, ok=True, detail="presente")
+        return CheckResult(name=name, ok=True, detail="present")
     return CheckResult(
         name=name,
         ok=False,
-        detail="não setada",
-        fix=f"Copie .env.example para .env e preencha {env} (ou export {env}=...).",
+        detail="not set",
+        fix=f"Copy .env.example to .env and fill in {env} (or export {env}=...).",
     )
 
 
 def check_redis(settings: Settings) -> CheckResult:
-    """Redis acessível (fila RQ)."""
+    """Redis reachable (RQ queue)."""
     name = "Redis"
     try:
         import redis
     except ImportError:
         return CheckResult(
-            name=name, ok=False, detail="pacote redis não instalado",
+            name=name, ok=False, detail="redis package not installed",
             fix="/usr/bin/python3 -m pip --python .venv/bin/python install redis",
         )
     try:
         client = redis.Redis.from_url(settings.redis_url, socket_connect_timeout=1)
         client.ping()
-    except Exception as exc:  # servidor fora do ar / URL errada
+    except Exception as exc:  # server down / wrong URL
         return CheckResult(
             name=name, ok=False, detail=str(exc),
-            fix="Suba o Redis: `sudo apt install redis-server` (ou `docker run -p 6379:6379 redis`).",
+            fix="Start Redis: `sudo apt install redis-server` (or `docker run -p 6379:6379 redis`).",
         )
     return CheckResult(name=name, ok=True, detail=settings.redis_url)
 
 
 def check_db(settings: Settings) -> CheckResult:
-    """Banco SQLite abre e migra."""
-    name = "Banco (SQLite)"
+    """SQLite database opens and migrates."""
+    name = "Database (SQLite)"
     try:
         from .db import Database
 
@@ -146,24 +145,24 @@ def check_db(settings: Settings) -> CheckResult:
     except Exception as exc:
         return CheckResult(
             name=name, ok=False, detail=str(exc),
-            fix="Verifique permissão de escrita em data/ (PRIMOCUT_DB_PATH).",
+            fix="Check write permission on data/ (PRIMOCUT_DB_PATH).",
         )
     return CheckResult(name=name, ok=True, detail=str(settings.db_path))
 
 
 def check_llm_sdk(settings: Settings) -> CheckResult:
-    """Confirma que o SDK do provedor de LLM selecionado está instalado."""
+    """Confirm the SDK of the selected LLM provider is installed."""
     provider = settings.llm_provider.lower()
     module = "openai" if provider in {"openai", "openrouter"} else "anthropic"
     name = f"SDK {module} ({provider})"
     if importlib.util.find_spec(module) is not None:
-        return CheckResult(name=name, ok=True, detail="instalado")
+        return CheckResult(name=name, ok=True, detail="installed")
     return CheckResult(
         name=name,
         ok=False,
-        detail="não instalado",
+        detail="not installed",
         fix=f"/usr/bin/python3 -m pip --python .venv/bin/python install {module}"
-        + ("   (OpenRouter usa o SDK da OpenAI)" if provider == "openrouter" else ""),
+        + ("   (OpenRouter uses the OpenAI SDK)" if provider == "openrouter" else ""),
     )
 
 

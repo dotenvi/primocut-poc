@@ -1,9 +1,9 @@
-"""Download do replay do chat. Sinal OPCIONAL (diretriz técnica #4).
+"""Chat replay download. OPTIONAL signal (technical guideline #4).
 
-Estratégia com fallback:
-1. `chat-downloader` (primário);
-2. se falhar/vazio, **fallback yt-dlp `--live-chat`** (parseia o `.live_chat.json`);
-3. se ambos falharem, retorna `None` — o pipeline segue sem chat (nunca bloqueia).
+Fallback strategy:
+1. `chat-downloader` (primary);
+2. if it fails/empty, **yt-dlp `--live-chat` fallback** (parses the `.live_chat.json`);
+3. if both fail, returns `None` — the pipeline continues without chat (never blocks).
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 
 def _default_downloader() -> Any:
-    from chat_downloader import ChatDownloader  # import tardio
+    from chat_downloader import ChatDownloader  # lazy import
 
     return ChatDownloader()
 
@@ -33,7 +33,7 @@ def _via_chat_downloader(
         for item in chat:
             secs = item.get("time_in_seconds")
             if secs is None:
-                continue  # mensagens fora da timeline (ex.: super chats sem offset)
+                continue  # messages off the timeline (e.g. super chats without offset)
             author = item.get("author") or {}
             messages.append(
                 ChatMessage(
@@ -42,8 +42,8 @@ def _via_chat_downloader(
                     text=item.get("message", "") or "",
                 )
             )
-    except Exception as exc:  # replay ausente / rede / parsing
-        logger.warning("chat-downloader falhou: %s", exc)
+    except Exception as exc:  # missing replay / network / parsing
+        logger.warning("chat-downloader failed: %s", exc)
         return None
     return messages or None
 
@@ -93,7 +93,7 @@ def _via_ytdlp_live_chat(
     try:
         lines = fetcher(url)
     except Exception as exc:
-        logger.warning("Fallback yt-dlp --live-chat falhou: %s", exc)
+        logger.warning("yt-dlp --live-chat fallback failed: %s", exc)
         return None
     messages: list[ChatMessage] = []
     for line in lines:
@@ -116,17 +116,17 @@ def download_chat(
     downloader_factory: Callable[[], Any] | None = None,
     live_chat_fetcher: Callable[[str], list[str]] | None = None,
 ) -> list[ChatMessage] | None:
-    """Mensagens do replay (chat-downloader → fallback yt-dlp), ou None."""
+    """Replay messages (chat-downloader → yt-dlp fallback), or None."""
     messages = _via_chat_downloader(url, downloader_factory)
     if messages:
-        logger.info("Chat: %d mensagens (chat-downloader).", len(messages))
+        logger.info("Chat: %d messages (chat-downloader).", len(messages))
         return messages
 
-    logger.info("Tentando fallback yt-dlp --live-chat…")
+    logger.info("Trying yt-dlp --live-chat fallback…")
     messages = _via_ytdlp_live_chat(url, live_chat_fetcher or _default_live_chat_lines)
     if messages:
-        logger.info("Chat: %d mensagens (fallback yt-dlp).", len(messages))
+        logger.info("Chat: %d messages (yt-dlp fallback).", len(messages))
         return messages
 
-    logger.info("Sem replay de chat utilizável.")
+    logger.info("No usable chat replay.")
     return None
