@@ -1,7 +1,9 @@
 # PRIMOCUT
 
 CLI + local web app that takes the URL of a YouTube live and produces a report with the
-topics discussed. Pipeline: **audio → chat replay → transcription → LLM analysis**.
+transcript and chat activity. Pipeline: **audio → chat replay → transcription**. Macro-topic
+extraction (the LLM analysis) is opt-in: pass `--create-topics` on the CLI, or use the
+**Generate topics with AI** button in the web report.
 
 Source of truth: [`docs/PRIMOCUT.md`](docs/PRIMOCUT.md).
 **Phase 1 (web MVP): [`docs/FASE1-MVP.md`](docs/FASE1-MVP.md).**

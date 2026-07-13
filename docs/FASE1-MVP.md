@@ -55,10 +55,12 @@ primocut worker      # processes the queue (needs Redis and a GPU for real trans
 primocut serve       # API + UI at http://127.0.0.1:8000
 ```
 Open the browser at `http://127.0.0.1:8000`: submit a URL, follow the live status in the list,
-open the report (macro topics, chat activity with peaks, searchable transcript, clickable
-timestamps, 🔥 on items that coincide with peaks), mark cuts and export JSON. The report screen
-also embeds the official YouTube player (sticky at the top): clicking a topic's **Watch** button
-seeks the player to that timestamp. Topics live inside a collapsible card (expand/collapse all).
+open the report (chat activity with peaks, searchable transcript, clickable timestamps, 🔥 on
+items that coincide with peaks), mark cuts and export JSON. Macro topics are **not** generated
+automatically (they cost an LLM call): use the **Generate topics with AI** button in the report's
+Topics card to create (or regenerate) them on demand. The report screen also embeds the official
+YouTube player: clicking a topic's **Watch** button seeks the player to that timestamp. Topics
+live inside a collapsible card (expand/collapse all).
 
 ## Frontend development
 
@@ -74,6 +76,7 @@ cd frontend && npm run dev     # Vite on :5173, proxy /api → :8000 (run `primo
 | GET | `/api/videos` | list with status/progress |
 | GET | `/api/videos/{id}` | detail (video + job) |
 | GET | `/api/videos/{id}/report` | report JSON (topics/chat/transcript, 🔥, links) |
+| POST | `/api/videos/{id}/topics` | generate macro topics with the LLM (opt-in; clears + re-runs; enqueues a topics-only job) |
 | POST | `/api/videos/{id}/topics/{tid}` `{status}` | mark/unmark (new/marked/discarded) |
 | GET | `/api/videos/{id}/export?format=json` | download the marked cuts (JSON) |
 | POST | `/api/videos/{id}/reenqueue` | reprocess (idempotent; resets status→queued) |
