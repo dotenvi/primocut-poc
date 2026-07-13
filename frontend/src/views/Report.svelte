@@ -36,14 +36,6 @@
   function toggle(tid) {
     expanded = { ...expanded, [tid]: !expanded[tid] }
   }
-  function expandAll() {
-    const e = {}
-    for (const t of data.topics) e[t.id] = true
-    expanded = e
-  }
-  function collapseAll() {
-    expanded = {}
-  }
 
   // Seek the embedded player to `seconds`, play, and bring the player into view
   // at the top of the page. If the player is unavailable (embed disabled / failed
@@ -183,13 +175,14 @@
       {:else if activeTab === 'topics'}
         <div class="tab-panel" role="tabpanel">
           <div class="card-actions">
+            <div class="card-actions-left">
+              {#if !data.topics.length}
+                <span class="muted">No topics yet — click “Generate topics with AI” to create them.</span>
+              {/if}
+            </div>
             <button class="mini ai" on:click={generateTopics}>
               ✨ {data.topics.length ? 'Regenerate' : 'Generate'} topics with AI
             </button>
-            {#if data.topics.length}
-              <button class="mini" on:click={expandAll}>Expand all</button>
-              <button class="mini" on:click={collapseAll}>Collapse all</button>
-            {/if}
           </div>
           {#each data.topics as t (t.id)}
             <div class="topic">
@@ -207,9 +200,6 @@
               {/if}
             </div>
           {/each}
-          {#if data.topics.length === 0}
-            <p class="muted">No topics yet — click “Generate topics with AI” to create them.</p>
-          {/if}
         </div>
       {:else if activeTab === 'transcript' && data.transcript.length}
         <div class="tab-panel" role="tabpanel">
