@@ -74,6 +74,7 @@ def build_report(s: Session, video_id: str) -> dict[str, Any] | None:
         },
         "job": None if job is None else {
             "stage": job.stage, "progress": job.progress, "status": job.status,
+            "stage_history": job.stage_history or [],
         },
         "warnings": job.warnings if job else [],
         "chat_signal": None if signal is None else {

@@ -78,6 +78,7 @@ def process_video(
     except PipelineError as exc:  # an essential stage failed → error
         logger.error("Job %s failed: %s", job_id, exc)
         with database.session() as s:
+            repo.append_stage(s, job_id, "__end__")  # close the failed stage
             repo.update_job(s, job_id, status="failed", error=str(exc))
             repo.set_video_status(s, video_id, VideoStatus.ERROR)
         raise

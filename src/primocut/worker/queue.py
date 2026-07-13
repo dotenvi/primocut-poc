@@ -165,6 +165,7 @@ def stop_video(
 
     with database.session() as s:
         if job_id is not None:
+            repo.append_stage(s, job_id, "__end__")  # close the interrupted stage
             repo.update_job(s, job_id, status="stopped")
         repo.set_video_status(s, video_id, VideoStatus.STOPPED)
 

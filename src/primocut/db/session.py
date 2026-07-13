@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterator
 
 from sqlalchemy import create_engine, event, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..config import Settings, get_settings
@@ -52,7 +53,13 @@ class Database:
             for version, sql_path in _pending_sql(current):
                 logger.info("Applying migration %03d (%s)", version, sql_path.name)
                 for stmt in _split_sql(sql_path.read_text(encoding="utf-8")):
-                    s.execute(text(stmt))
+                    try:
+                        s.execute(text(stmt))
+                    except OperationalError as exc:
+                        # Fresh databases already have new columns from
+                        # create_all(); a duplicate-column ADD COLUMN is a no-op.
+                        if "duplicate column name" not in str(exc).lower():
+                            raise
                 s.add(SchemaMigration(version=version))
 
     @contextmanager

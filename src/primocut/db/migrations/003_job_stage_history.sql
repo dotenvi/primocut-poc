@@ -1,0 +1,12 @@
+-- Record per-stage timing on jobs so the UI can show each pipeline stage's
+-- duration. stage_history holds an ordered list of stage transitions as JSON
+-- text, e.g. [{"stage": "Metadata", "at": "2026-07-13T18:00:00+00:00"}].
+-- Existing jobs get an empty list and simply show no durations.
+--
+-- NOTE the migration splitter naively breaks the file on the semicolon
+-- character, so comments here must not contain one.
+--
+-- Fresh databases already have this column from create_all, so the migration
+-- runner tolerates the resulting duplicate-column error and treats it as
+-- already applied.
+ALTER TABLE jobs ADD COLUMN stage_history TEXT DEFAULT '[]'

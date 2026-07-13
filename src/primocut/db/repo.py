@@ -108,6 +108,22 @@ def update_job(s: Session, job_id: int, **fields) -> JobRow | None:
     return row
 
 
+def append_stage(s: Session, job_id: int, stage: str) -> JobRow | None:
+    """Record a stage transition (skipping consecutive duplicates) so per-step
+    durations can be derived from the gaps between timestamps."""
+    from datetime import datetime, timezone
+
+    row = s.get(JobRow, job_id)
+    if row is None:
+        return None
+    history = list(row.stage_history or [])
+    if history and history[-1].get("stage") == stage:
+        return row
+    history.append({"stage": stage, "at": datetime.now(timezone.utc).isoformat()})
+    row.stage_history = history
+    return row
+
+
 def latest_job(s: Session, video_id: str) -> JobRow | None:
     return s.execute(
         select(JobRow).where(JobRow.video_id == video_id).order_by(JobRow.id.desc())

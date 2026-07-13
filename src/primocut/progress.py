@@ -45,6 +45,7 @@ class DbReporter:
         from .db import repo
 
         with self.db.session() as s:
+            repo.append_stage(s, self.job_id, stage)
             repo.update_job(s, self.job_id, stage=stage, progress=progress, status="started")
             if video_status is not None:
                 repo.set_video_status(s, self.video_id, video_status)

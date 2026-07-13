@@ -44,6 +44,9 @@ class JobRow(Base):
     status: Mapped[str] = mapped_column(String, default="queued")
     error: Mapped[str | None] = mapped_column(Text, default=None)
     warnings: Mapped[list] = mapped_column(JSON, default=list)
+    # Ordered transitions [{"stage": <label>, "at": <iso ts>}], one per stage
+    # change; per-step durations are derived from consecutive `at` timestamps.
+    stage_history: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
 
