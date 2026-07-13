@@ -31,7 +31,7 @@ def test_init_creates_schema_and_stamps_versions(tmp_path):
     db = _db(tmp_path)
     with db.session() as s:
         versions = list(s.execute(select(SchemaMigration.version)).scalars())
-    assert versions == [1, 2]  # base + drop-moments/english-status migration
+    assert versions == [1, 2, 3]  # base + drop-moments + job stage_history
 
 
 def test_migration_upgrades_legacy_db_preserving_topics(tmp_path):
@@ -54,11 +54,11 @@ def test_migration_upgrades_legacy_db_preserving_topics(tmp_path):
             "VALUES ('v1', 0, 'kept topic', 's', 0, 5, 0.8, 'marcado')"
         ))
 
-    db.init()  # applies migration 002
+    db.init()  # applies migrations 002 and 003
 
     with db.session() as s:
         versions = list(s.execute(select(SchemaMigration.version)).scalars())
-        assert versions == [1, 2]
+        assert versions == [1, 2, 3]
         # cut_moments table is gone
         tables = list(s.execute(text(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -76,7 +76,7 @@ def test_init_is_idempotent(tmp_path):
     db.init()  # must not duplicate versions nor fail
     with db.session() as s:
         versions = list(s.execute(select(SchemaMigration.version)).scalars())
-    assert versions == [1, 2]
+    assert versions == [1, 2, 3]
 
 
 def test_video_crud_and_status(tmp_path):
@@ -126,6 +126,22 @@ def test_job_lifecycle(tmp_path):
     with db.session() as s:
         j = repo.latest_job(s, "v1")
     assert j.status == "started" and j.progress == 40 and j.stage == "Transcription"
+
+
+def test_append_stage_records_transitions_and_dedups(tmp_path):
+    db = _db(tmp_path)
+    with db.session() as s:
+        repo.upsert_video(s, _video())
+        jid = repo.create_job(s, "v1").id
+    with db.session() as s:
+        repo.append_stage(s, jid, "Metadata")
+        repo.append_stage(s, jid, "Metadata")  # consecutive duplicate is ignored
+        repo.append_stage(s, jid, "Transcription")
+        repo.append_stage(s, jid, "__end__")
+    with db.session() as s:
+        hist = repo.latest_job(s, "v1").stage_history
+    assert [h["stage"] for h in hist] == ["Metadata", "Transcription", "__end__"]
+    assert all("at" in h for h in hist)  # every transition is timestamped
 
 
 def test_delete_video_cascades(tmp_path):

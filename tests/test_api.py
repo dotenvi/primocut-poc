@@ -128,6 +128,9 @@ def test_report_structure_and_links(tmp_path):
     rep = _client(db).get("/api/videos/v1/report").json()
     assert rep["video"]["title"] == "T"
     assert rep["job"]["status"] == "finished" and rep["job"]["progress"] == 100
+    # Per-stage timing captured end-to-end by the reporter and surfaced for the UI.
+    hist = rep["job"]["stage_history"]
+    assert [h["stage"] for h in hist][:1] == ["Metadata"] and hist[-1]["stage"] == "Done"
     assert rep["topics"][0]["title"] == "A"
     assert rep["topics"][0]["youtube_url"].endswith("&t=0")
     assert "moments" not in rep
