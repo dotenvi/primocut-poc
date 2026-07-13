@@ -227,10 +227,11 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* Report tabs (Chat activity / Topics / Transcript). */
 .tabs-card { margin: 24px 0; padding-top: 0; }
 .tab-bar {
-  display: flex; gap: 4px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
   margin: 0 -24px 20px; padding: 0 16px;
   border-bottom: 1px solid var(--border);
 }
+.tab-bar-action { margin-left: auto; }
 .tab {
   background: transparent; border: 0; border-bottom: 2px solid transparent;
   color: var(--muted); cursor: pointer;
@@ -244,8 +245,6 @@ button:disabled { opacity: 0.5; cursor: default; }
 /* Topics card (collapsible rows). */
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .card-head h3 { margin: 0; font-size: 1.05rem; }
-.card-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
-.card-actions-left { display: flex; align-items: center; gap: 8px; }
 .topic { border-bottom: 1px solid var(--border); padding: 10px 0; }
 .topic:last-child { border-bottom: 0; }
 .topic-head { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }

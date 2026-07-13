@@ -148,6 +148,11 @@
             on:click={() => (activeTab = t.id)}
           >{t.label}</button>
         {/each}
+        {#if activeTab === 'topics'}
+          <button class="mini ai tab-bar-action" on:click={generateTopics}>
+            ✨ {data.topics.length ? 'Regenerate' : 'Generate'} topics with AI
+          </button>
+        {/if}
       </div>
 
       {#if activeTab === 'chat' && data.chat_signal}
@@ -174,16 +179,9 @@
         </div>
       {:else if activeTab === 'topics'}
         <div class="tab-panel" role="tabpanel">
-          <div class="card-actions">
-            <div class="card-actions-left">
-              {#if !data.topics.length}
-                <span class="muted">No topics yet — click “Generate topics with AI” to create them.</span>
-              {/if}
-            </div>
-            <button class="mini ai" on:click={generateTopics}>
-              ✨ {data.topics.length ? 'Regenerate' : 'Generate'} topics with AI
-            </button>
-          </div>
+          {#if !data.topics.length}
+            <p class="muted">No topics yet — click “Generate topics with AI” to create them.</p>
+          {/if}
           {#each data.topics as t (t.id)}
             <div class="topic">
               <div class="topic-head">
