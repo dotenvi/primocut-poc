@@ -43,7 +43,6 @@ What the report delivers today:
   **"Generate topics with AI"** button in the report, or with `--create-topics` on the CLI
   `run`.
 - **Embedded YouTube player**: a topic's **Watch** button seeks the player.
-- **Cut marking** and **export** of the timestamp list as JSON.
 
 Code state: the pipeline runs end to end (validated on a real ~33-min live — transcription of
 914 segments in ~82 s on the RTX 3070 Ti). Test suite green, with no GPU/network needed
@@ -161,7 +160,7 @@ primocut serve       # API + UI at http://127.0.0.1:8000
 
 In the browser (`http://127.0.0.1:8000`): submit a URL, follow the status in the list, open
 the report (chat activity with peaks, searchable transcript, clickable timestamps, 🔥 on
-items that coincide with peaks), mark cuts and export JSON. Macro topics are **not** generated
+items that coincide with peaks). Macro topics are **not** generated
 automatically — use the **"Generate topics with AI"** button in the topics card (creates or
 regenerates on demand). A topic's **Watch** button seeks the embedded player.
 
@@ -205,7 +204,7 @@ pytest tests/test_pipeline.py -v              # end-to-end with fakes
 ```
 
 The suite also covers (Phase 1): migrations/DAO, job state transitions, **idempotent
-re-enqueue (cache respected)**, API endpoints, cut marking/export and cleanup (does not delete
+re-enqueue (cache respected)**, API endpoints and cleanup (does not delete
 recent audio, never deletes a transcript).
 
 ---
@@ -263,19 +262,9 @@ no-ops on fresh databases (where `create_all` already added the column from the 
 | GET | `/api/videos/{id}` | detail (video + job) |
 | GET | `/api/videos/{id}/report` | report JSON (topics/chat/transcript, 🔥, links) |
 | POST | `/api/videos/{id}/topics` | generate macro topics with the LLM (opt-in; clears + re-runs; enqueues a topics-only job) |
-| POST | `/api/videos/{id}/topics/{tid}` `{status}` | mark/unmark (new/marked/discarded) |
-| GET | `/api/videos/{id}/export?format=json` | download the marked cuts (JSON) |
 | POST | `/api/videos/{id}/reenqueue` | reprocess (idempotent; resets status→queued) |
 | POST | `/api/videos/{id}/stop` | interrupts processing (cancels the job/worker; status→stopped) |
 | DELETE | `/api/videos/{id}` | deletes EVERYTHING about the video (database + files); refuses (409) if active — stop it first |
-
-Export format (JSON):
-```json
-{ "video_id": "...", "url": "...", "title": "...", "generated_at": "...",
-  "cuts": [ { "title": "...", "start_seconds": 0, "end_seconds": 20,
-              "start_hms": "0:00", "end_hms": "0:20",
-              "youtube_url": "https://youtube.com/watch?v=ID&t=0", "score": 0.7 } ] }
-```
 
 ### Golden rule — timestamps are never invented
 
@@ -414,7 +403,7 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
   and chat peak detection. Delivered the modular architecture (already designed for Phase 1)
   and the test suite.
 - **Phase 1 — Web MVP ✅ (done / current base).** Queue (RQ+Redis) + database (SQLite) + API
-  (FastAPI) + navigable UI (Svelte) + navigable report + cut marking/export + audio cleanup +
+  (FastAPI) + navigable UI (Svelte) + navigable report + audio cleanup +
   embedded player with seek + opt-in topic generation.
 - **Phase 2 — Assisted cutting (next).** Automatic clip generation with FFmpeg; evaluate
   **WhisperX** (word-level timestamps + diarization). The `TranscriptionEngine` interface

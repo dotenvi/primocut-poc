@@ -1,4 +1,4 @@
-"""Data assembly for the API (navigable report, list, export).
+"""Data assembly for the API (navigable report, list).
 
 Reuses the Phase 0 models/rules: `youtube_url` (&t=), `format_timestamp` and the
 cross-reference with chat peaks (🔥), just like the Markdown report.
@@ -6,15 +6,12 @@ cross-reference with chat peaks (🔥), just like the Markdown report.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from ..db import repo
 from ..models import format_timestamp, youtube_url
-
-MARKED = "marked"
 
 
 def list_videos(s: Session) -> list[dict[str, Any]]:
@@ -62,7 +59,7 @@ def build_report(s: Session, video_id: str) -> dict[str, Any] | None:
 
     topics = [{
         "id": r.id, "title": r.title, "summary": r.summary,
-        "start": r.start, "end": r.end, "score": r.score, "status": r.status,
+        "start": r.start, "end": r.end, "score": r.score,
         "start_hms": format_timestamp(r.start), "end_hms": format_timestamp(r.end),
         "youtube_url": yt(r.start), "fire": fire(r.start, r.end),
     } for r in repo.get_topic_rows(s, video_id)]
@@ -88,28 +85,4 @@ def build_report(s: Session, video_id: str) -> dict[str, Any] | None:
             "index": seg.index, "start": seg.start, "end": seg.end, "text": seg.text,
             "start_hms": format_timestamp(seg.start), "youtube_url": yt(seg.start),
         } for seg in transcript.segments],
-    }
-
-
-def export_cuts(s: Session, video_id: str) -> dict[str, Any] | None:
-    v = repo.get_video(s, video_id)
-    if v is None:
-        return None
-
-    def entry(title: str, start: float, end: float, score: float) -> dict:
-        return {
-            "title": title,
-            "start_seconds": int(start), "end_seconds": int(end),
-            "start_hms": format_timestamp(start), "end_hms": format_timestamp(end),
-            "youtube_url": youtube_url(video_id, start), "score": score,
-        }
-
-    cuts = [entry(r.title, r.start, r.end, r.score)
-            for r in repo.get_topic_rows(s, video_id) if r.status == MARKED]
-    cuts.sort(key=lambda c: c["start_seconds"])
-
-    return {
-        "video_id": v.id, "url": v.url, "title": v.title,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "cuts": cuts,
     }

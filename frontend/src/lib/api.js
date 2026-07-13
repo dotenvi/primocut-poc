@@ -20,11 +20,9 @@ export const api = {
   detail: (id) => req('GET', `/videos/${id}`),
   report: (id) => req('GET', `/videos/${id}/report`),
   generateTopics: (id) => req('POST', `/videos/${id}/topics`),
-  markTopic: (id, tid, status) => req('POST', `/videos/${id}/topics/${tid}`, { status }),
   reenqueue: (id) => req('POST', `/videos/${id}/reenqueue`),
   stop: (id) => req('POST', `/videos/${id}/stop`),
   remove: (id) => req('DELETE', `/videos/${id}`),
-  exportUrl: (id) => `${base}/videos/${id}/export?format=json`,
 }
 
 export const ACTIVE = ['queued', 'downloading', 'transcribing', 'analyzing']

@@ -87,7 +87,6 @@ class TopicRow(Base):
     start: Mapped[float] = mapped_column(Float)
     end: Mapped[float] = mapped_column(Float)
     score: Mapped[float] = mapped_column(Float, default=0.0)
-    status: Mapped[str] = mapped_column(String, default="new")
 
 
 class SchemaMigration(Base):

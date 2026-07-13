@@ -8,7 +8,6 @@ from primocut.models import (
     Report,
     Segment,
     Topic,
-    TopicStatus,
     Transcript,
     Video,
     VideoStatus,
@@ -69,11 +68,6 @@ def test_video_status_enum():
     v = Video(id="abc123", url="http://x", title="T", channel="C", duration=100.0)
     assert v.status == VideoStatus.QUEUED
     assert VideoStatus.DONE.value == "done"
-
-
-def test_topic_defaults_to_new_status():
-    t = Topic(title="Python", summary="talks about python", start=5.0, end=12.0, score=0.8)
-    assert t.status == TopicStatus.NEW
 
 
 def test_report_youtube_url_uses_video_id():

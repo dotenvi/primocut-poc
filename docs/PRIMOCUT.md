@@ -17,7 +17,6 @@ Deliver, from a URL, a navigable report containing:
 - Topics in chronological order: title, short summary, start/end timestamp, clip-potential score.
 - Chart of chat activity throughout the live (message peaks = clip candidates).
 - Full searchable transcript, with clickable timestamps (`https://youtube.com/watch?v=ID&t=SECONDS`).
-- Marking topics as "cut" and exporting the timestamp list.
 
 **Out of the MVP:** automatic clip cutting/rendering, title/thumbnail generation, upload to YouTube, vertical format, multi-user, authentication, remote deploy.
 
@@ -59,7 +58,7 @@ Deliver, from a URL, a navigable report containing:
 - **Video**: id, url, title, channel, duration, status (queued/downloading/transcribing/analyzing/done/error)
 - **Transcript**: video_id, segments [{start, end, text}], language, model used
 - **ChatSignal**: video_id, time series [{minute, msgs, laughs, emotes}], detected peaks [{ts, intensity}]
-- **Topic**: video_id, title, summary, ts_start, ts_end, score, status (new/marked/discarded)
+- **Topic**: video_id, title, summary, ts_start, ts_end, score
 - **Job**: video_id, stage, progress, error
 
 ## Technical guidelines
@@ -76,6 +75,6 @@ Deliver, from a URL, a navigable report containing:
 ## Roadmap
 
 - **Phase 0 — CLI spike:** command-line script: URL → audio → transcription → chat → topics in Markdown. Goal: validate GPU on WSL2, the quality of the macro-topic segmentation, and chat peak detection.
-- **Phase 1 — MVP:** queue + database + web UI + navigable report + cut marking/export + audio cleanup.
+- **Phase 1 — MVP:** queue + database + web UI + navigable report + audio cleanup.
 - **Phase 2 — Assisted cutting:** automatic clip generation with FFmpeg; evaluate WhisperX (word-level timestamps + diarization).
 - **Phase 3 — Publishing:** AI titles/descriptions, vertical format, upload via the YouTube API, multi-user.

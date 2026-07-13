@@ -1,27 +1,19 @@
-"""FastAPI application: submission, status, report, marking and export."""
+"""FastAPI application: submission, status and report."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ..config import get_settings
 from ..db import get_database
-from ..db import repo
 from . import service
-
-_VALID_STATUS = {"new", "marked", "discarded"}
 
 
 class SubmitIn(BaseModel):
     url: str
-
-
-class StatusIn(BaseModel):
-    status: str
 
 
 # Dependencies (overridden in tests via app.dependency_overrides).
@@ -91,28 +83,6 @@ def create_app() -> FastAPI:
         except KeyError:
             raise HTTPException(status_code=404, detail="video not found")
 
-    @app.post("/api/videos/{video_id}/topics/{topic_id}")
-    def mark_topic(video_id: str, topic_id: int, body: StatusIn, db=Depends(get_db)) -> dict:
-        _validate_status(body.status)
-        with db.session() as s:
-            row = repo.set_topic_status(s, topic_id, body.status)
-            if row is None:
-                raise HTTPException(status_code=404, detail="topic not found")
-        return {"id": topic_id, "status": body.status}
-
-    @app.get("/api/videos/{video_id}/export")
-    def export(video_id: str, format: str = "json", db=Depends(get_db)):
-        if format != "json":
-            raise HTTPException(status_code=400, detail="supported format: json")
-        with db.session() as s:
-            data = service.export_cuts(s, video_id)
-        if data is None:
-            raise HTTPException(status_code=404, detail="video not found")
-        return JSONResponse(
-            content=data,
-            headers={"Content-Disposition": f'attachment; filename="{video_id}-cuts.json"'},
-        )
-
     @app.post("/api/videos/{video_id}/reenqueue", status_code=202)
     def reenqueue(video_id: str, db=Depends(get_db), queue=Depends(get_queue_dep)) -> dict:
         from ..worker.queue import reenqueue_video
@@ -148,11 +118,6 @@ def create_app() -> FastAPI:
 
     _mount_static(app)
     return app
-
-
-def _validate_status(status: str) -> None:
-    if status not in _VALID_STATUS:
-        raise HTTPException(status_code=400, detail=f"invalid status: {status}")
 
 
 def _mount_static(app: FastAPI) -> None:

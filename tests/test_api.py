@@ -148,41 +148,6 @@ def test_report_fire_flag_from_chat_peak(tmp_path):
     assert rep["topics"][0]["fire"] is True
 
 
-# --------------------------- mark + export ---------------------------
-
-
-def test_mark_topic_and_export(tmp_path):
-    db = _db(tmp_path)
-    _seed_done(db, tmp_path)
-    client = _client(db)
-    with db.session() as s:
-        tid = repo.get_topic_rows(s, "v1")[0].id
-
-    r = client.post(f"/api/videos/v1/topics/{tid}", json={"status": "marked"})
-    assert r.status_code == 200
-
-    exp = client.get("/api/videos/v1/export?format=json").json()
-    assert exp["cuts"] and exp["cuts"][0]["title"] == "A"
-    assert "type" not in exp["cuts"][0]
-    assert exp["cuts"][0]["youtube_url"].endswith("&t=0")
-    assert "start_hms" in exp["cuts"][0]
-
-
-def test_mark_invalid_status_and_missing_topic(tmp_path):
-    db = _db(tmp_path)
-    _seed_done(db, tmp_path)
-    client = _client(db)
-    assert client.post("/api/videos/v1/topics/1", json={"status": "xpto"}).status_code == 400
-    assert client.post("/api/videos/v1/topics/9999", json={"status": "marked"}).status_code == 404
-
-
-def test_export_empty_when_nothing_marked(tmp_path):
-    db = _db(tmp_path)
-    _seed_done(db, tmp_path)
-    exp = _client(db).get("/api/videos/v1/export").json()
-    assert exp["cuts"] == []
-
-
 # --------------------------- reenqueue ---------------------------
 
 

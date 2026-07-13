@@ -1,7 +1,7 @@
 """DAO: conversions between the pydantic models (Phase 0) and the ORM rows.
 
 "Pipeline-facing" functions return pydantic models (to reuse the Phase 0
-stages). "API-facing" functions return ORM rows (with id/status) for marking.
+stages). "API-facing" functions return ORM rows (with id) for the API layer.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from ..models import (
     Peak,
     Segment,
     Topic,
-    TopicStatus,
     Transcript,
     Video,
     VideoStatus,
@@ -192,7 +191,7 @@ def save_topics(s: Session, video_id: str, topics: list[Topic]) -> None:
     for i, t in enumerate(topics):
         s.add(TopicRow(
             video_id=video_id, ordinal=i, title=t.title, summary=t.summary,
-            start=t.start, end=t.end, score=t.score, status=t.status.value,
+            start=t.start, end=t.end, score=t.score,
         ))
 
 
@@ -201,8 +200,7 @@ def get_topics(s: Session, video_id: str) -> list[Topic]:
         select(TopicRow).where(TopicRow.video_id == video_id).order_by(TopicRow.ordinal)
     ).scalars()
     return [
-        Topic(title=r.title, summary=r.summary, start=r.start, end=r.end,
-              score=r.score, status=TopicStatus(r.status))
+        Topic(title=r.title, summary=r.summary, start=r.start, end=r.end, score=r.score)
         for r in rows
     ]
 
@@ -211,10 +209,3 @@ def get_topic_rows(s: Session, video_id: str) -> list[TopicRow]:
     return list(s.execute(
         select(TopicRow).where(TopicRow.video_id == video_id).order_by(TopicRow.ordinal)
     ).scalars())
-
-
-def set_topic_status(s: Session, topic_id: int, status: str) -> TopicRow | None:
-    row = s.get(TopicRow, topic_id)
-    if row is not None:
-        row.status = status
-    return row

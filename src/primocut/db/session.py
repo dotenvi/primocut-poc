@@ -56,9 +56,12 @@ class Database:
                     try:
                         s.execute(text(stmt))
                     except OperationalError as exc:
-                        # Fresh databases already have new columns from
-                        # create_all(); a duplicate-column ADD COLUMN is a no-op.
-                        if "duplicate column name" not in str(exc).lower():
+                        # Fresh databases already match the current ORM schema from
+                        # create_all(), so column-shape migrations are no-ops there:
+                        # a duplicate-column ADD COLUMN, or a DROP COLUMN for a
+                        # column create_all() never made.
+                        msg = str(exc).lower()
+                        if "duplicate column name" not in msg and "no such column" not in msg:
                             raise
                 s.add(SchemaMigration(version=version))
 

@@ -48,12 +48,6 @@ ACTIVE_STATUSES = {
 }
 
 
-class TopicStatus(str, Enum):
-    NEW = "new"
-    MARKED = "marked"
-    DISCARDED = "discarded"
-
-
 class Video(BaseModel):
     id: str
     url: str
@@ -133,7 +127,6 @@ class Topic(BaseModel):
     start: float
     end: float
     score: float = Field(ge=0.0, le=1.0)
-    status: TopicStatus = TopicStatus.NEW
 
 
 class Report(BaseModel):

@@ -10,7 +10,6 @@ from primocut.db.session import Database
 from primocut.models import (
     Segment,
     Topic,
-    TopicStatus,
     Transcript,
     Video,
     VideoStatus,
@@ -31,20 +30,23 @@ def test_init_creates_schema_and_stamps_versions(tmp_path):
     db = _db(tmp_path)
     with db.session() as s:
         versions = list(s.execute(select(SchemaMigration.version)).scalars())
-    assert versions == [1, 2, 3]  # base + drop-moments + job stage_history
+    # base + drop-moments + job stage_history + drop-topic-status
+    assert versions == [1, 2, 3, 4]
 
 
 def test_migration_upgrades_legacy_db_preserving_topics(tmp_path):
-    """A legacy v1 DB (with cut_moments + Portuguese statuses) upgrades cleanly:
-    the cut_moments table is dropped, existing topics are preserved and their
-    status values are translated to English."""
+    """A legacy v1 DB (with cut_moments + a topics.status column) upgrades
+    cleanly: the cut_moments table is dropped, the topics.status column is
+    dropped, and existing topics are otherwise preserved."""
     db = Database(f"sqlite:///{tmp_path / 't.db'}")
-    # Build the legacy state by hand: current tables, a leftover cut_moments
-    # table, a topic with the old 'marcado' status, and only version 1 stamped.
+    # Build the legacy state by hand: current tables plus the retired bits — a
+    # leftover cut_moments table and the old topics.status column (create_all no
+    # longer makes it) — with a topic that has a status, and version 1 stamped.
     Base.metadata.create_all(db.engine)
     with db.session() as s:
         s.add(SchemaMigration(version=1))
         repo.upsert_video(s, _video())
+        s.execute(text("ALTER TABLE topics ADD COLUMN status TEXT DEFAULT 'new'"))
         s.execute(text(
             "CREATE TABLE cut_moments (id INTEGER PRIMARY KEY, video_id TEXT, title TEXT)"
         ))
@@ -54,20 +56,21 @@ def test_migration_upgrades_legacy_db_preserving_topics(tmp_path):
             "VALUES ('v1', 0, 'kept topic', 's', 0, 5, 0.8, 'marcado')"
         ))
 
-    db.init()  # applies migrations 002 and 003
+    db.init()  # applies migrations 002, 003 and 004
 
     with db.session() as s:
         versions = list(s.execute(select(SchemaMigration.version)).scalars())
-        assert versions == [1, 2, 3]
+        assert versions == [1, 2, 3, 4]
         # cut_moments table is gone
         tables = list(s.execute(text(
             "SELECT name FROM sqlite_master WHERE type='table'"
         )).scalars())
         assert "cut_moments" not in tables
-        # topic preserved with translated status
-        topics = repo.get_topics(s, "v1")
-        assert [t.title for t in topics] == ["kept topic"]
-        assert topics[0].status == TopicStatus.MARKED
+        # topics.status column is gone
+        cols = [r[1] for r in s.execute(text("PRAGMA table_info(topics)")).all()]
+        assert "status" not in cols
+        # topic itself preserved
+        assert [t.title for t in repo.get_topics(s, "v1")] == ["kept topic"]
 
 
 def test_init_is_idempotent(tmp_path):
@@ -76,7 +79,7 @@ def test_init_is_idempotent(tmp_path):
     db.init()  # must not duplicate versions nor fail
     with db.session() as s:
         versions = list(s.execute(select(SchemaMigration.version)).scalars())
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
 
 
 def test_video_crud_and_status(tmp_path):
@@ -104,16 +107,14 @@ def test_transcript_roundtrip(tmp_path):
     assert t is not None and t.segments[0].text == "oi"
 
 
-def test_topics_save_and_mark(tmp_path):
+def test_topics_save_and_get(tmp_path):
     db = _db(tmp_path)
     with db.session() as s:
         repo.upsert_video(s, _video())
         repo.save_topics(s, "v1", [Topic(title="A", summary="s", start=0.0, end=5.0, score=0.8)])
     with db.session() as s:
-        tid = repo.get_topic_rows(s, "v1")[0].id
-        repo.set_topic_status(s, tid, "marked")
-    with db.session() as s:
-        assert repo.get_topics(s, "v1")[0].status == TopicStatus.MARKED
+        topics = repo.get_topics(s, "v1")
+        assert [(t.title, t.score) for t in topics] == [("A", 0.8)]
 
 
 def test_job_lifecycle(tmp_path):
