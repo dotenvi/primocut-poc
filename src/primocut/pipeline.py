@@ -11,6 +11,7 @@ All resilience/degradation (see the Resilience section of docs/DEVELOPMENT.md) i
 from __future__ import annotations
 
 import contextlib
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -54,6 +55,7 @@ def run_stages(
     engine: TranscriptionEngine,
     llm: SelectionLLM,
     create_topics: bool = False,
+    audio_dir: Path | str | None = None,
     metadata_fn: Callable = audio_dl.fetch_metadata,
     download_audio_fn: Callable = audio_dl.download_audio,
     download_chat_fn: Callable = chat_downloader.download_chat,
@@ -64,11 +66,16 @@ def run_stages(
     `gpu_lock` (context manager) serializes transcription on the GPU across
     workers. CLI/tests pass None → no lock (no-op).
 
+    `audio_dir` is where the downloaded/normalized audio is written; when
+    omitted it falls back to `settings.data_dir` (the worker/webapp path). The
+    CLI passes a throwaway temp dir so nothing lands in `data/`.
+
     Topic extraction (the LLM step) is opt-in: it only runs when
     `create_topics` is True. Otherwise the run stops after chat and any
     previously cached topics are returned as-is.
     """
     warnings: list[str] = []
+    audio_dir = Path(audio_dir) if audio_dir is not None else Path(settings.data_dir)
 
     # --- Metadata (degradable) ---
     reporter.update(stage="Metadata", progress=5)
@@ -92,7 +99,7 @@ def run_stages(
             reporter.update(stage="Audio download", progress=15,
                             video_status=VideoStatus.DOWNLOADING)
             with step(logger, "Audio download"):
-                audio_path = download_audio_fn(url, settings.data_dir, video_id=video.id)
+                audio_path = download_audio_fn(url, audio_dir, video_id=video.id)
             reporter.update(stage="Transcription", progress=30,
                             video_status=VideoStatus.TRANSCRIBING)
             with step(logger, f"Transcription ({engine.name})"):
@@ -147,10 +154,13 @@ def run_stages(
     )
 
 
+REPORT_FILENAME = "report.md"
+
+
 def run_pipeline(
     url: str,
     *,
-    output_path: str | Path = "report.md",
+    output_dir: str | Path = ".",
     settings: Settings | None = None,
     engine: TranscriptionEngine | None = None,
     llm: SelectionLLM | None = None,
@@ -161,6 +171,11 @@ def run_pipeline(
 ) -> Path:
     """CLI wrapper: FileStore + LogReporter + Markdown report (Phase 0).
 
+    Every artifact is exported to `output_dir`: the JSON caches
+    (`<id>.transcript.json`, `<id>.topics.json`) and the Markdown report
+    (`report.md`). The intermediate audio goes to a throwaway temp dir and is
+    discarded when the run finishes — `data/` is not used by the CLI.
+
     Topics are only extracted when `create_topics` is True (the `--create-topics`
     CLI flag).
     """
@@ -168,14 +183,18 @@ def run_pipeline(
     settings = settings or get_settings()
     engine = engine or get_engine(settings)
     llm = llm or get_llm(settings)
-    output_path = Path(output_path)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    result = run_stages(
-        url, settings=settings, store=FileStore(settings), reporter=LogReporter(),
-        engine=engine, llm=llm, create_topics=create_topics, metadata_fn=metadata_fn,
-        download_audio_fn=download_audio_fn, download_chat_fn=download_chat_fn,
-    )
+    with tempfile.TemporaryDirectory(prefix="primocut-") as audio_dir:
+        result = run_stages(
+            url, settings=settings, store=FileStore(settings, base_dir=output_dir),
+            reporter=LogReporter(), engine=engine, llm=llm, create_topics=create_topics,
+            audio_dir=audio_dir, metadata_fn=metadata_fn,
+            download_audio_fn=download_audio_fn, download_chat_fn=download_chat_fn,
+        )
 
+    output_path = output_dir / REPORT_FILENAME
     with step(logger, "Markdown report"):
         report = Report(
             video=result.video, transcript_model=result.transcript.model,

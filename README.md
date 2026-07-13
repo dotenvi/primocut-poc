@@ -43,7 +43,9 @@ for each missing item.
 ## Run the pipeline (CLI, Phase 0)
 
 ```bash
-primocut run "https://www.youtube.com/watch?v=<ID>" -o report.md
+# -o is the output DIRECTORY (default: current dir). Artifacts land there:
+# report.md + <id>.transcript.json + <id>.topics.json.
+primocut run "https://www.youtube.com/watch?v=<ID>" -o ./out
 ```
 
 ## Web app (Phase 1)

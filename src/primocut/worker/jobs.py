@@ -7,6 +7,7 @@ Re-enqueueing is idempotent: stages whose artifact is already in the database ar
 
 from __future__ import annotations
 
+import tempfile
 from typing import Callable
 
 from ..config import Settings, get_settings
@@ -69,12 +70,16 @@ def process_video(
     reporter = DbReporter(database, job_id, video_id)
 
     try:
-        result = run_stages(
-            url, settings=settings, store=store, reporter=reporter,
-            engine=engine, llm=llm, create_topics=create_topics, gpu_lock=gpu_lock,
-            metadata_fn=metadata_fn, download_audio_fn=download_audio_fn,
-            download_chat_fn=download_chat_fn,
-        )
+        # Audio goes to a throwaway temp dir (discarded when the job ends); the
+        # transcript/topics/chat live in the database. `data/` holds only the DB.
+        with tempfile.TemporaryDirectory(prefix="primocut-") as audio_dir:
+            result = run_stages(
+                url, settings=settings, store=store, reporter=reporter,
+                engine=engine, llm=llm, create_topics=create_topics, gpu_lock=gpu_lock,
+                audio_dir=audio_dir,
+                metadata_fn=metadata_fn, download_audio_fn=download_audio_fn,
+                download_chat_fn=download_chat_fn,
+            )
     except PipelineError as exc:  # an essential stage failed → error
         logger.error("Job %s failed: %s", job_id, exc)
         with database.session() as s:

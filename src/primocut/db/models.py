@@ -1,7 +1,7 @@
 """ORM models (SQLAlchemy 2.0), aligned with the data model in PRIMOCUT.md.
 
-Audio is a file on disk (temporary retention); transcript/topics/chat_signal
-are permanent (rows here).
+Audio is ephemeral (written to a temp dir, discarded when the job ends);
+transcript/topics/chat_signal are permanent (rows here).
 """
 
 from __future__ import annotations

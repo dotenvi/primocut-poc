@@ -26,10 +26,15 @@ class Store(Protocol):
 
 
 class FileStore:
-    """On-disk cache (JSON) — identical behaviour to Phase 0."""
+    """On-disk cache (JSON) — identical behaviour to Phase 0.
 
-    def __init__(self, settings: Settings) -> None:
-        self.dir = Path(settings.data_dir)
+    `base_dir` overrides where the JSON artifacts are written; when omitted it
+    falls back to `settings.data_dir`. The CLI passes the run's `--output`
+    directory so nothing lands in `data/`.
+    """
+
+    def __init__(self, settings: Settings, base_dir: Path | str | None = None) -> None:
+        self.dir = Path(base_dir) if base_dir is not None else Path(settings.data_dir)
 
     def _p(self, video_id: str, name: str) -> Path:
         return self.dir / f"{video_id}.{name}.json"

@@ -65,9 +65,11 @@ class Settings(BaseSettings):
     # --- Chat ---
     chat_zscore_threshold: float = 2.0
 
-    # --- Storage / retention ---
+    # --- Storage ---
+    # Base dir for the SQLite DB (see `db_path`). Per-video artifacts are not
+    # stored here: the CLI exports them to `--output` and the audio (both CLI
+    # and worker) uses a throwaway temp dir.
     data_dir: Path = Path("data")
-    audio_retention_days: int = 7
 
     # --- Phase 1: database, queue, server ---
     db_path: Path = Path("data/primocut.db")

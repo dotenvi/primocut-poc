@@ -182,7 +182,11 @@ def delete_video(
     stopper=None,
     force: bool = False,
 ) -> dict:
-    """Delete EVERYTHING about the video (database + files). Refuses if active (stop it first)."""
+    """Delete EVERYTHING about the video from the database. Refuses if active (stop it first).
+
+    There are no per-video files to remove: the audio lives in a throwaway temp
+    dir (already gone) and transcripts/topics/chat are database rows.
+    """
     settings = settings or get_settings()
     if database is None:
         from ..db import get_database
@@ -191,7 +195,6 @@ def delete_video(
 
     from ..db import repo
     from ..models import ACTIVE_STATUSES
-    from .cleanup import purge_video_files
 
     with database.session() as s:
         v = repo.get_video(s, video_id)
@@ -208,10 +211,9 @@ def delete_video(
 
     with database.session() as s:
         repo.delete_video(s, video_id)
-    files = purge_video_files(settings.data_dir, video_id)
 
-    logger.info("Video %s deleted (%d file(s)).", video_id, len(files))
-    return {"video_id": video_id, "deleted_files": len(files)}
+    logger.info("Video %s deleted.", video_id)
+    return {"video_id": video_id}
 
 
 def _enqueue_job(

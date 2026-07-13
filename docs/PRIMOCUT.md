@@ -36,7 +36,7 @@ Deliver, from a URL, a navigable report containing:
                                               4. Analysis (LLM → topics + timestamps,
                                                  cross-referencing chat signals)
 [SQLite] ← metadata, jobs, transcripts, topics, chat signals
-[Local disk] ← audio files (temporary retention)
+[Temp dir] ← audio files (per job, discarded when the job ends)
 ```
 
 ## Stack (decided)
@@ -68,13 +68,13 @@ Deliver, from a URL, a navigable report containing:
 3. **Timestamps are never invented**: the LLM analysis must reference exclusively timestamps that exist in the transcript. Structure the prompt/data so the LLM selects segments, rather than generating numbers.
 4. **Long transcripts**: 3-4h lives exceed the LLM's useful context — process them in overlapping windows and consolidate the topics.
 5. **Chat is an optional signal**: not every live preserves the chat replay; its absence must not block the pipeline. Peak detection by message density per minute (z-score) and reaction markers (laughs "KKKK", emotes).
-6. **Retention**: audio is deleted by a cleanup job after N days (configurable, default 7); transcripts, topics and chat signals are permanent.
+6. **Audio is ephemeral**: the audio is written to a throwaway temp dir and discarded when the run/job ends; transcripts, topics and chat signals are permanent (database in the web app, `--output` JSON caches in the CLI).
 7. **Asynchronous jobs**: no heavy processing inside an HTTP request; everything goes through the queue with persisted status/progress.
 8. **yt-dlp kept up to date**: it breaks frequently due to YouTube changes; pin an easy update process.
 
 ## Roadmap
 
 - **Phase 0 — CLI spike:** command-line script: URL → audio → transcription → chat → topics in Markdown. Goal: validate GPU on WSL2, the quality of the macro-topic segmentation, and chat peak detection.
-- **Phase 1 — MVP:** queue + database + web UI + navigable report + audio cleanup.
+- **Phase 1 — MVP:** queue + database + web UI + navigable report.
 - **Phase 2 — Assisted cutting:** automatic clip generation with FFmpeg; evaluate WhisperX (word-level timestamps + diarization).
 - **Phase 3 — Publishing:** AI titles/descriptions, vertical format, upload via the YouTube API, multi-user.

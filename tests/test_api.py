@@ -198,12 +198,10 @@ def test_stop_404(tmp_path):
 def test_delete_endpoint_purges(tmp_path):
     db = _db(tmp_path)
     _seed_done(db, tmp_path)  # status done
-    (tmp_path / "v1.16k.wav").write_bytes(b"x")
     r = _client(db).delete("/api/videos/v1")
     assert r.status_code == 200
     with db.session() as s:
         assert repo.get_video(s, "v1") is None
-    assert not (tmp_path / "v1.16k.wav").exists()
 
 
 def test_delete_refuses_when_active(tmp_path):

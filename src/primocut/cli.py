@@ -46,7 +46,10 @@ def doctor() -> None:
 @app.command()
 def run(
     url: str = typer.Argument(..., help="YouTube live URL"),
-    output: str = typer.Option("report.md", "-o", "--output", help="Output Markdown file"),
+    output: str = typer.Option(
+        ".", "-o", "--output",
+        help="Output directory for the artifacts (report.md + transcript/topics JSON)",
+    ),
     provider: str | None = typer.Option(
         None, "-p", "--provider", help="Analysis provider: anthropic | openai | openrouter"
     ),
@@ -89,7 +92,7 @@ def run(
 
     try:
         result = run_pipeline(
-            url, output_path=output, settings=settings, create_topics=create_topics
+            url, output_dir=output, settings=settings, create_topics=create_topics
         )
     except PipelineError as exc:
         console.print(f"[red]Essential stage failed:[/red] {exc}")
@@ -153,24 +156,6 @@ def serve(
         f"[green]PRIMOCUT[/green] at http://{host or settings.serve_host}:{port or settings.serve_port}"
     )
     uvicorn.run(create_app(), host=host or settings.serve_host, port=port or settings.serve_port)
-
-
-@app.command()
-def cleanup(
-    days: int | None = typer.Option(None, "--days", help="Retention in days (config default)"),
-    schedule: bool = typer.Option(False, "--schedule", help="Schedule daily cleanup on rq-scheduler"),
-) -> None:
-    """Delete old audio files (transcripts/topics/signals are permanent)."""
-    setup_logging()
-    from .worker.cleanup import cleanup_audio, schedule_daily_cleanup
-
-    settings = get_settings()
-    if schedule:
-        schedule_daily_cleanup(settings)
-        console.print("[green]Daily cleanup scheduled[/green] (run an `rqscheduler` to execute it).")
-        return
-    deleted = cleanup_audio(settings.data_dir, days if days is not None else settings.audio_retention_days)
-    console.print(f"[green]Cleanup:[/green] {len(deleted)} audio file(s) removed.")
 
 
 @app.command()

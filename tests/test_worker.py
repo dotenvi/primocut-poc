@@ -83,6 +83,23 @@ def test_process_video_success_transitions(tmp_path):
         assert [t.title for t in repo.get_topics(s, "v1")] == ["A"]
 
 
+def test_process_video_audio_uses_tempdir_not_data_dir(tmp_path):
+    db = _db(tmp_path)
+    _seed_video(db)
+    seen: dict[str, Path] = {}
+    common = _common(tmp_path)
+
+    def capture(url, out_dir, video_id=None):
+        seen["audio_dir"] = Path(out_dir)
+        return Path("/tmp/fake.wav")
+
+    common["download_audio_fn"] = capture
+    process_video("v1", database=db, **common)
+
+    assert seen["audio_dir"] != tmp_path  # data_dir is not used for audio
+    assert not seen["audio_dir"].exists()  # temp dir cleaned up when the job ends
+
+
 def test_process_video_skips_topics_by_default(tmp_path):
     db = _db(tmp_path)
     _seed_video(db)
@@ -239,22 +256,18 @@ def test_stop_video_missing_raises(tmp_path):
         stop_video("nope", settings=_settings(tmp_path), database=db, stopper=_NOOP_STOP)
 
 
-def test_delete_video_purges_db_and_files(tmp_path):
+def test_delete_video_purges_db(tmp_path):
     db = _db(tmp_path)
     _seed_video(db)
-    (tmp_path / "v1.16k.wav").write_bytes(b"x")
-    (tmp_path / "v1.transcript.json").write_text("{}")
     with db.session() as s:
         repo.save_transcript(s, Transcript(video_id="v1", language="pt", model="m", segments=[]))
         repo.set_video_status(s, "v1", VideoStatus.DONE)
 
     res = delete_video("v1", settings=_settings(tmp_path), database=db, stopper=_NOOP_STOP)
-    assert res["deleted_files"] >= 2
+    assert res == {"video_id": "v1"}  # no files to purge (audio was in a temp dir)
     with db.session() as s:
         assert repo.get_video(s, "v1") is None
         assert repo.get_transcript(s, "v1") is None
-    assert not (tmp_path / "v1.16k.wav").exists()
-    assert not (tmp_path / "v1.transcript.json").exists()
 
 
 def test_delete_video_refuses_when_active(tmp_path):

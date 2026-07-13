@@ -25,7 +25,7 @@ ends over the **same pipeline core** (no logic is rewritten between them):
 
 - **CLI** (`primocut`): commands `doctor` (environment diagnostics), `run` (end-to-end
   pipeline → Markdown report), `models` (lists OpenRouter models with tool-use support,
-  including free ones), `serve`, `worker` and `cleanup`.
+  including free ones), `serve` and `worker`.
 - **Local web app** (`primocut serve` + `primocut worker`): a Svelte SPA served by FastAPI,
   an RQ+Redis queue and a SQLite database. You submit a URL, follow the live status
   (polling) and open the report in the browser.
@@ -117,15 +117,17 @@ Redis and the database**, and prints the fix command for each pending item. Exit
 
 ```bash
 # Start with a SHORT live/video to validate quickly (GPU, cost, quality)
-primocut run "https://www.youtube.com/watch?v=<ID>" -o report.md
+# -o is the output DIRECTORY (default: current dir); artifacts (report.md +
+# transcript/topics JSON) are exported there. The audio uses a temp dir.
+primocut run "https://www.youtube.com/watch?v=<ID>" -o ./out
 
 # Macro topics are opt-in on the CLI too:
-primocut run "<url>" -o report.md --create-topics
+primocut run "<url>" -o ./out --create-topics
 
 # Provider/model directly on the command line (without editing .env):
-primocut run "<url>" -o report.md --provider openai     --model gpt-4o-mini
-primocut run "<url>" -o report.md --provider anthropic  --model claude-haiku-4-5
-primocut run "<url>" -o report.md --provider openrouter --model anthropic/claude-3.5-sonnet
+primocut run "<url>" -o ./out --provider openai     --model gpt-4o-mini
+primocut run "<url>" -o ./out --provider anthropic  --model claude-haiku-4-5
+primocut run "<url>" -o ./out --provider openrouter --model anthropic/claude-3.5-sonnet
 ```
 
 Supported providers (`SelectionLLM` interface, selected via `PRIMOCUT_LLM_PROVIDER` or
@@ -168,16 +170,12 @@ Running **N workers is safe by construction**: the light stages (download/chat/a
 different videos overlap, but the GPU lock guarantees **1 transcription at a time**
 (see [Architecture](#3-architecture)).
 
-### 2.6 Cleanup (audio retention)
+### 2.6 Audio is ephemeral (no cleanup needed)
 
-```bash
-primocut cleanup                 # one-shot (good for cron); deletes audio > N days (default 7)
-primocut cleanup --days 3
-primocut cleanup --schedule      # registers a daily cleanup on rq-scheduler (run an `rqscheduler`)
-```
-
-Deletes only `*.wav/*.m4a/*.mp3`; **never** touches transcripts/topics/signals (permanent in
-the database).
+The normalized audio is written to a throwaway temp dir (`tempfile`) — both in the
+CLI (`run_pipeline`) and in the worker (`process_video`) — and discarded when the
+run/job ends. There is no retention job to run: transcripts/topics/signals are the
+permanent artifacts (database in the web app, `--output` JSON caches in the CLI).
 
 ### 2.7 Frontend development (Vite)
 
@@ -204,8 +202,7 @@ pytest tests/test_pipeline.py -v              # end-to-end with fakes
 ```
 
 The suite also covers (Phase 1): migrations/DAO, job state transitions, **idempotent
-re-enqueue (cache respected)**, API endpoints and cleanup (does not delete
-recent audio, never deletes a transcript).
+re-enqueue (cache respected)** and API endpoints.
 
 ---
 
@@ -214,9 +211,9 @@ recent audio, never deletes a transcript).
 ```
 [Svelte Web UI] ──/api──> [FastAPI] ──enqueue──> [RQ + Redis] ──> [Worker]
                               │                                      │
-                              └──────────────── [SQLite] <──────────┘
+                              └──────────────── [SQLite] <───────────┘
                      (videos, jobs, transcripts, chat_signals, topics)
-[Disk] ← audio files (temporary retention; scheduled cleanup)
+[Temp dir] ← audio files (per job, discarded when the job ends)
 ```
 
 - **1 RQ job per video** runs the stages sequentially
@@ -327,19 +324,21 @@ and covered by tests**.
 
 ### 4.2 Cache / resume (pay-once)
 
-Each file in `data/<video_id>.*` (CLI/`FileStore`) — and the equivalent in the database
+Each artifact in the `--output` dir (CLI/`FileStore`) — and the equivalent in the database
 (web app/`DbStore`) — is reused across re-runs:
 
 | Artifact | Stage it avoids repeating |
 |---|---|
-| `*.16k.wav` | Audio download + normalization |
-| `*.transcript.json` | Transcription (the most expensive GPU stage) |
-| `*.topics.json` | Macro analysis (LLM, paid) |
+| `<id>.transcript.json` / DB row | Transcription (the most expensive GPU stage) |
+| `<id>.topics.json` / DB row | Macro analysis (LLM, paid) |
 
+- The audio is **not** a cache artifact: it lives in a throwaway temp dir, so a re-run
+  re-downloads it — but only when the transcript is missing (a present transcript skips the
+  audio+transcription stages entirely).
 - The **partial** result of a stage (when ended mid-way by a permanent failure) feeds the
   current report, but is **not** cached — so a re-run tries again. Because the windows are few
   (~2 in a 33-min live), the retry is cheap.
-- To force a recompute, delete the corresponding cache file in `data/` (CLI) or
+- To force a recompute, delete the corresponding JSON in the `--output` dir (CLI) or
   re-enqueue/regenerate topics (web app).
 
 ### 4.3 Cross-cutting robustness guards
@@ -403,7 +402,7 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
   and chat peak detection. Delivered the modular architecture (already designed for Phase 1)
   and the test suite.
 - **Phase 1 — Web MVP ✅ (done / current base).** Queue (RQ+Redis) + database (SQLite) + API
-  (FastAPI) + navigable UI (Svelte) + navigable report + audio cleanup +
+  (FastAPI) + navigable UI (Svelte) + navigable report +
   embedded player with seek + opt-in topic generation.
 - **Phase 2 — Assisted cutting (next).** Automatic clip generation with FFmpeg; evaluate
   **WhisperX** (word-level timestamps + diarization). The `TranscriptionEngine` interface
@@ -417,6 +416,21 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 
 The most important section. **Never overwrite or delete an entry**: a reverted decision gets a
 **new** entry pointing to the reversal. Dates in ISO (`YYYY-MM-DD`).
+
+### 2026-07-13 · Audio is ephemeral; `data/` holds only the DB (reverses 2026-07-12 retention)
+**Type:** technical.
+**Decision:** the normalized audio is written to a throwaway temp dir (`tempfile`) — both in
+the CLI (`run_pipeline`) and in the worker (`process_video`) via the new `run_stages(audio_dir=…)`
+parameter — and discarded when the run/job ends. The CLI now takes `-o/--output` as an **output
+directory** (default `.`) where it exports `report.md` + the transcript/topics JSON; it no longer
+uses `data/` at all. The web app keeps only the SQLite DB in `data/` (`db_path`). Removed the now-
+dead retention code (`worker/cleanup.py`, the `cleanup` CLI command, `schedule_daily_cleanup`,
+`purge_video_files`, and the `audio_retention_days` setting); `delete_video` only deletes DB rows.
+**Reason:** audio is a large, recomputable intermediate; keeping it on disk with a retention job
+added moving parts for no benefit now that the permanent artifacts (transcript/topics/chat) live
+in the DB (web) or the `--output` JSON caches (CLI). A temp dir self-cleans and removes the
+retention/purge machinery entirely.
+**Supersedes:** the 2026-07-12 "Retention: audio temporary, transcript permanent" entry below.
 
 ### 2026-07-13 · Real per-stage timing in the pipeline stages panel
 **Type:** product + technical.
