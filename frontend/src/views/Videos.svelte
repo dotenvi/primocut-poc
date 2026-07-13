@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { api, isActive } from '../lib/api.js'
+  import { currentStep } from '../lib/steps.js'
 
   let videos = []
   let error = ''
@@ -19,11 +20,6 @@
     try { await api.stop(id); load() } catch (e) { error = e.message }
   }
 
-  async function remove(id) {
-    if (!confirm('Delete EVERYTHING about this video? This is irreversible — to reprocess you will need to resubmit the URL.')) return
-    try { await api.remove(id); load() } catch (e) { error = e.message }
-  }
-
   onMount(() => {
     load()
     timer = setInterval(load, 2000) // live polling
@@ -39,19 +35,27 @@
   {/if}
   <ul class="list">
     {#each videos as v (v.id)}
-      <li class="row">
-        <div class="grow">
-          <a href={`#/report/${v.id}`}>{v.title || v.id}</a>
-          <div class="muted">{v.channel}</div>
-        </div>
-        <span class="status status-{v.status}">{v.status}</span>
-        <div class="bar" title={`${v.progress}%`}>
-          <div class="fill" style="width:{v.progress}%"></div>
+      <li class="vrow">
+        <div class="vrow-main">
+          <div class="grow">
+            <a href={`#/report/${v.id}`}>{v.title || v.id}</a>
+            <div class="muted">{v.channel}</div>
+          </div>
+          <span class="status status-{v.status}">{v.status}</span>
+          {#if isActive(v.status)}
+            <button class="mini" on:click|preventDefault={() => stop(v.id)}>Stop</button>
+          {/if}
         </div>
         {#if isActive(v.status)}
-          <button class="mini" on:click|preventDefault={() => stop(v.id)}>Stop</button>
-        {:else}
-          <button class="mini danger" on:click|preventDefault={() => remove(v.id)}>Delete</button>
+          {@const step = currentStep(v.stage)}
+          <div class="progress-line">
+            <div class="progress-head">
+              <span class="spinner"></span>
+              <b class="progress-label">{step.label}</b>
+              <span class="progress-count">{step.number}/{step.total}</span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill" style="width:{v.progress}%"></div></div>
+          </div>
         {/if}
       </li>
     {/each}

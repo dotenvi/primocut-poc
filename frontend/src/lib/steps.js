@@ -8,6 +8,19 @@ export const STEPS = [
   { key: 'topics', label: 'Macro topics', match: 'topics' },
 ]
 
+// Current step summary for a compact progress indicator: the active step's
+// label plus an "N / total" counter. `index` is -1 while still queued.
+export function currentStep(stage) {
+  const s = (stage || '').toLowerCase()
+  const idx = STEPS.findIndex((st) => s.includes(st.match))
+  return {
+    index: idx,
+    number: idx < 0 ? 0 : idx + 1,
+    total: STEPS.length,
+    label: idx < 0 ? 'Queued' : STEPS[idx].label,
+  }
+}
+
 // Derive each step's state from the current stage/status.
 // state ∈ 'done' | 'running' | 'failed' | 'pending'
 export function computeSteps(stage, status) {

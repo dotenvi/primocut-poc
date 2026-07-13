@@ -49,8 +49,21 @@ button:disabled { opacity: 0.5; cursor: default; }
 .list { list-style: none; padding: 0; }
 .row { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .grow { flex: 1; min-width: 0; }
-.bar { width: 140px; height: 8px; background: #0c0e12; border-radius: 6px; overflow: hidden; }
-.fill { height: 100%; background: var(--accent); transition: width 0.4s; }
+/* --- Video list rows + inline "processing" progress line --- */
+.vrow { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.vrow-main { display: flex; align-items: center; gap: 14px; }
+.progress-line { margin-top: 10px; }
+.progress-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.progress-label { color: var(--fg); font-size: 0.92em; }
+.progress-count { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+.progress-bar { width: 100%; height: 4px; background: #0c0e12; border-radius: 4px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent); transition: width 0.4s; }
+.spinner {
+  width: 15px; height: 15px; flex: 0 0 auto; border-radius: 50%;
+  border: 2px solid rgba(224, 96, 58, 0.25); border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 .status { font-size: 0.8em; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border); text-transform: uppercase; }
 .status-done { color: var(--ok); border-color: var(--ok); }
@@ -93,24 +106,29 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .spark { display: flex; align-items: flex-end; gap: 2px; height: 80px; padding: 6px; background: #0c0e12; border-radius: 8px; }
 .spark-bar { flex: 1; min-width: 2px; background: var(--accent); border-radius: 2px 2px 0 0; }
-.peaks { margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
+.peaks { margin-top: 8px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.peak-link {
+  background: transparent; border: 0; padding: 0; cursor: pointer;
+  color: var(--accent); font: inherit; font-variant-numeric: tabular-nums;
+}
+.peak-link:hover { text-decoration: underline; }
 
 .item { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 
 .search { width: 100%; margin-bottom: 10px; }
 .transcript { max-height: 420px; overflow: auto; background: #0c0e12; border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
 .transcript p { margin: 4px 0; }
-.ts { font-variant-numeric: tabular-nums; color: var(--muted); margin-right: 6px; }
-
-/* --- Embedded YouTube player (sticky at the top of the report) --- */
-.player-sticky {
-  position: sticky; top: 0; z-index: 20;
-  background: var(--bg); padding: 10px 0 12px;
-  box-shadow: 0 6px 12px -8px rgba(0, 0, 0, 0.6);
+.ts {
+  font-variant-numeric: tabular-nums; color: var(--muted); margin-right: 6px;
+  background: transparent; border: 0; padding: 0; cursor: pointer; font: inherit;
 }
+.ts:hover { color: var(--accent); text-decoration: underline; }
+
+/* --- Embedded YouTube player (in the report header, scrolls with the page) --- */
 .player-frame {
-  height: 42vh; width: 100%; max-width: min(100%, calc(42vh * 16 / 9));
-  margin: 0 auto; background: #000; border-radius: 10px; overflow: hidden;
+  /* Full width, aligned with the rest of the report content (standard 16:9). */
+  width: 100%; aspect-ratio: 16 / 9;
+  background: #000; border-radius: 10px; overflow: hidden;
 }
 .player-frame iframe, .player-frame > div { width: 100%; height: 100%; border: 0; display: block; }
 .player-frame.hidden { display: none; }
@@ -126,14 +144,17 @@ button:disabled { opacity: 0.5; cursor: default; }
 .card-actions { display: flex; gap: 8px; }
 .topic { border-bottom: 1px solid var(--border); padding: 8px 0; }
 .topic:last-child { border-bottom: 0; }
-.topic-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.topic-head { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
 .disclosure {
+  flex: 1 1 auto; min-width: 0; text-align: left;
   background: transparent; border: 0; color: var(--fg); cursor: pointer;
   padding: 2px 4px; display: inline-flex; align-items: center; gap: 6px; font: inherit;
 }
+.disclosure b { overflow-wrap: anywhere; }
 .disclosure:hover { text-decoration: underline; }
-.caret { color: var(--muted); width: 1em; display: inline-block; }
-.topic-spacer { flex: 1 1 auto; }
+.caret { color: var(--muted); width: 1em; flex: 0 0 auto; display: inline-block; }
+.topic-head .fire, .topic-head .watch { flex: 0 0 auto; }
+.topic-meta { margin: 2px 0 0 26px; font-variant-numeric: tabular-nums; }
 .topic-body { margin: 6px 0 2px 26px; }
 .topic.marked .cut { background: var(--ok); color: #fff; border-color: var(--ok); }
 .mini.link { color: var(--muted); text-decoration: none; display: inline-flex; align-items: center; }

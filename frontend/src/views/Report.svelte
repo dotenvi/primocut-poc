@@ -1,7 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte'
   import { api, isActive } from '../lib/api.js'
-  import { hms } from '../lib/format.js'
   import PipelinePanel from '../components/PipelinePanel.svelte'
   import Player from '../components/Player.svelte'
 
@@ -33,17 +32,6 @@
   })
   onDestroy(() => clearInterval(timer))
 
-  async function mark(item) {
-    const next = item.status === 'marked' ? 'new' : 'marked'
-    try {
-      await api.markTopic(id, item.id, next)
-      item.status = next
-      data = data // trigger reactivity
-    } catch (e) {
-      error = e.message
-    }
-  }
-
   function toggle(tid) {
     expanded = { ...expanded, [tid]: !expanded[tid] }
   }
@@ -56,12 +44,18 @@
     expanded = {}
   }
 
-  // Seek the embedded player to the topic start; if the player is unavailable
-  // (embed disabled / failed to load), fall back to opening YouTube.
-  function watch(t) {
-    const ok = playerRef && playerRef.seek(t.start)
-    if (!ok) window.open(t.youtube_url, '_blank', 'noreferrer')
+  // Seek the embedded player to `seconds`, play, and bring the player into view
+  // at the top of the page. If the player is unavailable (embed disabled / failed
+  // to load), fall back to opening YouTube at that time instead.
+  function seekTo(seconds, youtubeUrl) {
+    const ok = playerRef && playerRef.seek(seconds)
+    if (!ok) {
+      window.open(youtubeUrl, '_blank', 'noreferrer')
+      return
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
+  const watch = (t) => seekTo(t.start, t.youtube_url)
 
   async function reprocess() {
     try { await api.reenqueue(id); load() } catch (e) { error = e.message }
@@ -91,11 +85,7 @@
   <p class="muted">Loading…</p>
 {:else}
   <header class="report-head">
-    <h1>{data.video.title}</h1>
-    <div class="muted">
-      {data.video.channel} · {hms(data.video.duration)} ·
-      <span class="status status-{data.video.status}">{data.video.status}</span>
-    </div>
+    <Player bind:this={playerRef} videoId={data.video.id} />
     <div class="actions">
       <a class="btn" href={api.exportUrl(id)} download>Export cuts (JSON)</a>
       <button class="btn ghost" on:click={reprocess}>Reprocess</button>
@@ -122,11 +112,6 @@
     </section>
   {/if}
 
-  <!-- Sticky player: stays visible on the viewport while browsing topics -->
-  <div class="player-sticky">
-    <Player bind:this={playerRef} videoId={data.video.id} />
-  </div>
-
   <section>
     <h2>Chat activity</h2>
     {#if data.chat_signal}
@@ -143,7 +128,7 @@
         <div class="peaks">
           Peaks:
           {#each data.chat_signal.peaks as p}
-            <a href={p.youtube_url} target="_blank" rel="noreferrer">{p.hms}</a>
+            <button class="peak-link" on:click={() => seekTo(p.ts, p.youtube_url)}>{p.hms}</button>
           {/each}
         </div>
       {:else}
@@ -163,21 +148,16 @@
       </div>
     </div>
     {#each data.topics as t (t.id)}
-      <div class="topic {t.status === 'marked' ? 'marked' : ''}">
+      <div class="topic">
         <div class="topic-head">
           <button class="disclosure" on:click={() => toggle(t.id)} aria-expanded={!!expanded[t.id]}>
             <span class="caret">{expanded[t.id] ? '▾' : '▸'}</span>
             <b>{t.title}</b>
           </button>
-          {#if t.fire}<span title="coincides with a chat peak">🔥</span>{/if}
-          <span class="muted"> · {t.start_hms}–{t.end_hms} · score {t.score.toFixed(2)}</span>
-          <span class="topic-spacer"></span>
-          <button class="mini" on:click={() => watch(t)}>▶ Watch</button>
-          <a class="mini link" href={t.youtube_url} target="_blank" rel="noreferrer">YouTube ↗</a>
-          <button class="cut" on:click={() => mark(t)}>
-            {t.status === 'marked' ? '✓ cut' : 'mark'}
-          </button>
+          {#if t.fire}<span class="fire" title="coincides with a chat peak">🔥</span>{/if}
+          <button class="mini watch" on:click={() => watch(t)}>▶ Watch</button>
         </div>
+        <div class="topic-meta muted">{t.start_hms}–{t.end_hms} · score {t.score.toFixed(2)}</div>
         {#if expanded[t.id]}
           <div class="topic-body muted">{t.summary}</div>
         {/if}
@@ -194,7 +174,7 @@
     <div class="transcript">
       {#each segs as s (s.index)}
         <p>
-          <a class="ts" href={s.youtube_url} target="_blank" rel="noreferrer">{s.start_hms}</a>
+          <button class="ts" on:click={() => seekTo(s.start, s.youtube_url)}>{s.start_hms}</button>
           {s.text}
         </p>
       {/each}
