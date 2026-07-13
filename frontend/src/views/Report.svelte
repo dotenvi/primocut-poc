@@ -135,6 +135,7 @@
       stage={data.job ? data.job.stage : ''}
       status={data.video.status}
       progress={data.job ? data.job.progress : 0}
+      stageHistory={data.job ? data.job.stage_history : []}
       active={running}
       {completed}
       on:stop={stop}

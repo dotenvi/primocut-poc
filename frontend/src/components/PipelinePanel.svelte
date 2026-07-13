@@ -1,11 +1,13 @@
 <script>
   import { createEventDispatcher } from 'svelte'
   import { computeSteps } from '../lib/steps.js'
+  import { formatDuration } from '../lib/format.js'
 
   export let stage = ''
   export let status = 'queued'
   export let progress = 0
   export let completed = {} // STEP.key → boolean (artifact confirmed)
+  export let stageHistory = [] // job.stage_history — for per-step durations
   export let active = false // pipeline still running → show the Stop button
 
   const dispatch = createEventDispatcher()
@@ -15,7 +17,7 @@
     pending: 'Pending', skipped: 'Skipped',
   }
 
-  $: steps = computeSteps(stage, status, completed)
+  $: steps = computeSteps(stage, status, completed, stageHistory)
 </script>
 
 <article class="pipeline card">
@@ -48,7 +50,12 @@
             {#if s.state === 'running'}<span class="pulse-dot"></span>{/if}
             {s.label}
           </span>
-          <span class="badge st-{s.state}">{badgeText[s.state]}</span>
+          <span class="li-right">
+            {#if s.durationSec != null}
+              <span class="stage-dur">{formatDuration(s.durationSec)}</span>
+            {/if}
+            <span class="badge st-{s.state}">{badgeText[s.state]}</span>
+          </span>
         </li>
       {/each}
     </ul>

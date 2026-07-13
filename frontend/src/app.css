@@ -89,6 +89,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .pipe-details summary { cursor: pointer; color: var(--muted); font-size: 0.9em; }
 .pipe-details ul { list-style: none; padding: 0; margin: 12px 0 0; }
 .pipe-details li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.pipe-details .li-right { display: flex; align-items: center; gap: 10px; }
+.stage-dur { color: var(--muted); font-size: 0.8em; font-variant-numeric: tabular-nums; }
 .badge { font-size: 0.72em; padding: 2px 9px; border-radius: 20px; text-transform: uppercase; color: #0c0e12; font-weight: 600; }
 .badge.st-running { background: var(--amber); color: #0c0e12; }
 .badge.st-pending { background: rgba(255,255,255,0.12); color: var(--muted); }
