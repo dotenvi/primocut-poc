@@ -82,6 +82,15 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="video not found")
         return data
 
+    @app.post("/api/videos/{video_id}/topics", status_code=202)
+    def generate_topics(video_id: str, db=Depends(get_db), queue=Depends(get_queue_dep)) -> dict:
+        from ..worker.queue import generate_topics as gen_topics
+
+        try:
+            return gen_topics(video_id, database=db, queue=queue)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="video not found")
+
     @app.post("/api/videos/{video_id}/topics/{topic_id}")
     def mark_topic(video_id: str, topic_id: int, body: StatusIn, db=Depends(get_db)) -> dict:
         _validate_status(body.status)

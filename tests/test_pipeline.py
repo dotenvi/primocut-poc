@@ -52,6 +52,7 @@ def test_pipeline_end_to_end_writes_report(tmp_path):
         settings=Settings(anthropic_api_key="x", data_dir=tmp_path),
         engine=_FakeEngine(),
         llm=_FakeLLM(),
+        create_topics=True,
         metadata_fn=lambda url: _video(),
         download_audio_fn=lambda url, out_dir, video_id=None: Path("/tmp/fake.wav"),
         download_chat_fn=lambda url: [
@@ -75,6 +76,7 @@ def test_pipeline_without_chat_still_completes(tmp_path):
         settings=Settings(anthropic_api_key="x", data_dir=tmp_path),
         engine=_FakeEngine(),
         llm=_FakeLLM(),
+        create_topics=True,
         metadata_fn=lambda url: _video(),
         download_audio_fn=lambda url, out_dir, video_id=None: Path("/tmp/fake.wav"),
         download_chat_fn=lambda url: None,  # no replay
@@ -82,6 +84,24 @@ def test_pipeline_without_chat_still_completes(tmp_path):
     md = out.read_text(encoding="utf-8")
     assert "No chat replay available" in md
     assert "Subject" in md  # analysis does not depend on chat
+
+
+def test_pipeline_skips_topics_by_default(tmp_path):
+    out = tmp_path / "report.md"
+    run_pipeline(
+        "https://youtube.com/watch?v=abc123",
+        output_path=out,
+        settings=Settings(anthropic_api_key="x", data_dir=tmp_path),
+        engine=_FakeEngine(),
+        llm=_BoomLLM(),  # must NOT be called without --create-topics
+        metadata_fn=lambda url: _video(),
+        download_audio_fn=lambda url, out_dir, video_id=None: Path("/tmp/fake.wav"),
+        download_chat_fn=lambda url: None,
+    )
+    md = out.read_text(encoding="utf-8")
+    assert "## Macro topics (0)" in md
+    assert "_No topic identified._" in md
+    assert not (tmp_path / "abc123.topics.json").exists()
 
 
 class _BoomLLM:
@@ -94,6 +114,7 @@ def test_pipeline_reuses_cached_analysis(tmp_path):
     common = dict(
         settings=settings,
         engine=_FakeEngine(),
+        create_topics=True,
         metadata_fn=lambda url: _video(),
         download_audio_fn=lambda url, out_dir, video_id=None: Path("/tmp/fake.wav"),
         download_chat_fn=lambda url: None,
@@ -118,7 +139,7 @@ def test_pipeline_degrades_when_metadata_fails(tmp_path):
     run_pipeline(
         "https://youtube.com/watch?v=abc123", output_path=out,
         settings=Settings(anthropic_api_key="x", data_dir=tmp_path),
-        engine=_FakeEngine(), llm=_FakeLLM(),
+        engine=_FakeEngine(), llm=_FakeLLM(), create_topics=True,
         metadata_fn=boom_meta,
         download_audio_fn=lambda url, out_dir, video_id=None: Path("/tmp/fake.wav"),
         download_chat_fn=lambda url: None,
@@ -139,7 +160,7 @@ def test_pipeline_degrades_when_analysis_permanently_fails(tmp_path):
     run_pipeline(
         "https://youtube.com/watch?v=abc123", output_path=out,
         settings=Settings(anthropic_api_key="x", data_dir=tmp_path, retry_base_delay=0.0),
-        engine=_FakeEngine(), llm=_PermLLM(),
+        engine=_FakeEngine(), llm=_PermLLM(), create_topics=True,
         metadata_fn=lambda url: _video(),
         download_audio_fn=lambda url, out_dir, video_id=None: Path("/tmp/fake.wav"),
         download_chat_fn=lambda url: None,

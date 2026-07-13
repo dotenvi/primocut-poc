@@ -24,6 +24,7 @@ logger = get_logger(__name__)
 def process_video(
     video_id: str,
     *,
+    create_topics: bool = False,
     settings: Settings | None = None,
     database=None,
     engine=None,
@@ -70,8 +71,9 @@ def process_video(
     try:
         result = run_stages(
             url, settings=settings, store=store, reporter=reporter,
-            engine=engine, llm=llm, gpu_lock=gpu_lock, metadata_fn=metadata_fn,
-            download_audio_fn=download_audio_fn, download_chat_fn=download_chat_fn,
+            engine=engine, llm=llm, create_topics=create_topics, gpu_lock=gpu_lock,
+            metadata_fn=metadata_fn, download_audio_fn=download_audio_fn,
+            download_chat_fn=download_chat_fn,
         )
     except PipelineError as exc:  # an essential stage failed → error
         logger.error("Job %s failed: %s", job_id, exc)

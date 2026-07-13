@@ -70,7 +70,8 @@ def _seed_done(db, tmp_path, vid="v1"):
         repo.upsert_video(s, Video(id=vid, url=f"https://youtube.com/watch?v={vid}",
                                    title="", channel="", duration=0.0, status=VideoStatus.QUEUED))
     process_video(
-        vid, database=db, settings=Settings(data_dir=tmp_path, db_path=tmp_path / "t.db", retry_base_delay=0.0),
+        vid, database=db, create_topics=True,
+        settings=Settings(data_dir=tmp_path, db_path=tmp_path / "t.db", retry_base_delay=0.0),
         engine=_FakeEngine(), llm=_FakeLLM(), gpu_lock=contextlib.nullcontext(),
         metadata_fn=lambda url: Video(id=vid, url=url, title="T", channel="C", duration=30.0),
         download_audio_fn=lambda url, out_dir, video_id=None: Path("/tmp/fake.wav"),
@@ -189,6 +190,25 @@ def test_reenqueue(tmp_path):
     r = _client(db, q).post("/api/videos/v1/reenqueue")
     assert r.status_code == 202
     assert q.calls == [("v1",)]
+
+
+# --------------------------- generate topics ---------------------------
+
+
+def test_generate_topics_endpoint(tmp_path):
+    db = _db(tmp_path)
+    _seed_done(db, tmp_path)  # done, with topics cached
+    q = _FakeQueue()
+    r = _client(db, q).post("/api/videos/v1/topics")
+    assert r.status_code == 202
+    assert q.calls == [("v1",)]  # enqueued a topics run for v1
+    with db.session() as s:
+        assert repo.get_video(s, "v1").status == "queued"  # reset for processing
+        assert repo.get_topic_rows(s, "v1") == []  # cache cleared → will regenerate
+
+
+def test_generate_topics_404(tmp_path):
+    assert _client(_db(tmp_path)).post("/api/videos/nope/topics").status_code == 404
 
 
 # --------------------------- stop / delete ---------------------------

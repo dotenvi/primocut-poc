@@ -78,6 +78,37 @@ def reenqueue_video(
     return _enqueue_job(database, queue, video_id, settings)
 
 
+def generate_topics(
+    video_id: str,
+    *,
+    settings: Settings | None = None,
+    database=None,
+    queue=None,
+) -> dict:
+    """Enqueue a topics-only run (LLM) for an existing video.
+
+    Clears any previously cached topics so the analysis always (re)runs, then
+    enqueues `process_video` with `create_topics=True`. Everything else
+    (audio/transcription/chat) is served from the cache, so only the LLM step
+    actually executes.
+    """
+    settings = settings or get_settings()
+    if database is None:
+        from ..db import get_database
+
+        database = get_database(settings)
+
+    from ..db import repo
+
+    with database.session() as s:
+        if repo.get_video(s, video_id) is None:
+            raise KeyError(video_id)
+        repo.save_topics(s, video_id, [])  # drop cache → force (re)generation
+        repo.set_video_status(s, video_id, VideoStatus.QUEUED)
+
+    return _enqueue_job(database, queue, video_id, settings, create_topics=True)
+
+
 class VideoBusyError(RuntimeError):
     """Attempt to delete a video that is still being actively processed."""
 
@@ -182,14 +213,19 @@ def delete_video(
     return {"video_id": video_id, "deleted_files": len(files)}
 
 
-def _enqueue_job(database, queue, video_id: str, settings: Settings) -> dict:
+def _enqueue_job(
+    database, queue, video_id: str, settings: Settings, *, create_topics: bool = False
+) -> dict:
     from ..db import repo
 
     with database.session() as s:
         job_id = repo.create_job(s, video_id).id
 
     q = queue if queue is not None else get_queue(settings)
-    rq_job = q.enqueue(process_video, video_id, job_timeout=settings.rq_job_timeout)
+    rq_job = q.enqueue(
+        process_video, video_id, create_topics=create_topics,
+        job_timeout=settings.rq_job_timeout,
+    )
 
     with database.session() as s:
         repo.update_job(s, job_id, rq_job_id=rq_job.id)

@@ -62,6 +62,7 @@ def _common(tmp_path):
         settings=_settings(tmp_path),
         engine=_FakeEngine(),
         llm=_FakeLLM(),
+        create_topics=True,
         gpu_lock=contextlib.nullcontext(),  # no Redis in tests
         metadata_fn=lambda url: Video(id="v1", url=url, title="T", channel="C", duration=30.0),
         download_audio_fn=lambda url, out_dir, video_id=None: Path("/tmp/fake.wav"),
@@ -80,6 +81,58 @@ def test_process_video_success_transitions(tmp_path):
         assert job.status == "finished" and job.progress == 100
         assert repo.get_transcript(s, "v1") is not None
         assert [t.title for t in repo.get_topics(s, "v1")] == ["A"]
+
+
+def test_process_video_skips_topics_by_default(tmp_path):
+    db = _db(tmp_path)
+    _seed_video(db)
+
+    class _BoomLLM:
+        def select(self, **k):
+            raise AssertionError("the LLM must not be called without create_topics")
+
+    common = _common(tmp_path)
+    del common["create_topics"]  # default → no topics
+    common["llm"] = _BoomLLM()
+    res = process_video("v1", database=db, **common)
+    assert res["topics"] == 0
+    with db.session() as s:
+        assert repo.get_video(s, "v1").status == "done"
+        assert repo.get_topic_rows(s, "v1") == []  # nothing generated
+
+
+def test_generate_topics_enqueues_with_flag(tmp_path):
+    from types import SimpleNamespace
+
+    from primocut.worker.queue import generate_topics
+
+    db = _db(tmp_path)
+    _seed_video(db)
+
+    class _FakeQueue:
+        def __init__(self):
+            self.calls = []
+
+        def enqueue(self, fn, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return SimpleNamespace(id="rq1")
+
+    fq = _FakeQueue()
+    res = generate_topics("v1", settings=_settings(tmp_path), database=db, queue=fq)
+    assert res["video_id"] == "v1"
+    args, kwargs = fq.calls[0]
+    assert args == ("v1",)
+    assert kwargs["create_topics"] is True
+    with db.session() as s:
+        assert repo.get_video(s, "v1").status == "queued"
+
+
+def test_generate_topics_missing_raises(tmp_path):
+    from primocut.worker.queue import generate_topics
+
+    db = _db(tmp_path)
+    with pytest.raises(KeyError):
+        generate_topics("nope", settings=_settings(tmp_path), database=db, queue=object())
 
 
 def test_gpu_lock_acquired_once_during_transcription(tmp_path):

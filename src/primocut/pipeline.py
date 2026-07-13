@@ -1,7 +1,8 @@
 """Pipeline orchestration, with per-stage progress.
 
 Flow: metadata → audio → transcription → chat (optional) → analysis (macro
-topics). `run_stages` is the core reused by CLI and worker, parameterized by a
+topics, opt-in via `create_topics`). `run_stages` is the core reused by CLI and
+worker, parameterized by a
 `Store` (cache/persistence) and a `ProgressReporter`. `run_pipeline` is the CLI
 wrapper (Phase 0): uses `FileStore`+`LogReporter` and writes the Markdown report.
 All resilience/degradation (FALLBACKS.md) is preserved.
@@ -52,6 +53,7 @@ def run_stages(
     reporter: ProgressReporter,
     engine: TranscriptionEngine,
     llm: SelectionLLM,
+    create_topics: bool = False,
     metadata_fn: Callable = audio_dl.fetch_metadata,
     download_audio_fn: Callable = audio_dl.download_audio,
     download_chat_fn: Callable = chat_downloader.download_chat,
@@ -61,6 +63,10 @@ def run_stages(
 
     `gpu_lock` (context manager) serializes transcription on the GPU across
     workers. CLI/tests pass None → no lock (no-op).
+
+    Topic extraction (the LLM step) is opt-in: it only runs when
+    `create_topics` is True. Otherwise the run stops after chat and any
+    previously cached topics are returned as-is.
     """
     warnings: list[str] = []
 
@@ -119,17 +125,20 @@ def run_stages(
                 )
                 store.save_chat_signal(chat_signal)
 
-    # --- Analysis (degradable): cache only writes on full success ---
-    reporter.update(stage="Analysis: topics", progress=70, video_status=VideoStatus.ANALYZING)
+    # --- Analysis (opt-in; degradable): only runs the LLM when explicitly
+    # requested (`create_topics`). Cache only writes on full success. ---
     topics = store.get_topics(video.id)
-    if topics is None:
+    if topics is None and create_topics:
+        reporter.update(stage="Analysis: topics", progress=70, video_status=VideoStatus.ANALYZING)
         with step(logger, "Analysis: macro topics"):
             before = len(warnings)
             topics = extract_topics(transcript, llm, settings, warnings=warnings)
             if len(warnings) == before:
                 store.save_topics(video.id, topics)
-    else:
+    elif topics is not None:
         logger.info("Reusing cached topics.")
+    if topics is None:
+        topics = []
 
     reporter.update(stage="Done", progress=100, video_status=VideoStatus.DONE)
     return PipelineResult(
@@ -145,11 +154,16 @@ def run_pipeline(
     settings: Settings | None = None,
     engine: TranscriptionEngine | None = None,
     llm: SelectionLLM | None = None,
+    create_topics: bool = False,
     metadata_fn: Callable = audio_dl.fetch_metadata,
     download_audio_fn: Callable = audio_dl.download_audio,
     download_chat_fn: Callable = chat_downloader.download_chat,
 ) -> Path:
-    """CLI wrapper: FileStore + LogReporter + Markdown report (Phase 0)."""
+    """CLI wrapper: FileStore + LogReporter + Markdown report (Phase 0).
+
+    Topics are only extracted when `create_topics` is True (the `--create-topics`
+    CLI flag).
+    """
     setup_logging()
     settings = settings or get_settings()
     engine = engine or get_engine(settings)
@@ -158,7 +172,7 @@ def run_pipeline(
 
     result = run_stages(
         url, settings=settings, store=FileStore(settings), reporter=LogReporter(),
-        engine=engine, llm=llm, metadata_fn=metadata_fn,
+        engine=engine, llm=llm, create_topics=create_topics, metadata_fn=metadata_fn,
         download_audio_fn=download_audio_fn, download_chat_fn=download_chat_fn,
     )
 
