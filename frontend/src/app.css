@@ -181,10 +181,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .pulse-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--cue); margin-right: 6px; animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-.report-foot {
-  display: flex; justify-content: flex-end;
-  margin-top: 32px; padding-top: 18px; border-top: 1px solid var(--border);
-}
+.head-actions { display: flex; align-items: center; gap: 8px; }
 .processing { color: var(--cue); }
 .degraded, .player-blocked {
   background: var(--cue-dim); border: 1px solid var(--cue);

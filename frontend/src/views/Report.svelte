@@ -133,6 +133,7 @@
       {completed}
       on:stop={stop}
       on:reprocess={reprocess}
+      on:remove={remove}
     />
   {/if}
 
@@ -226,9 +227,4 @@
     </article>
   {/if}
 
-  {#if !running}
-    <footer class="report-foot">
-      <button class="mini danger" on:click={remove}>Delete video</button>
-    </footer>
-  {/if}
 {/if}
