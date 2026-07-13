@@ -16,10 +16,6 @@
     }
   }
 
-  async function stop(id) {
-    try { await api.stop(id); load() } catch (e) { error = e.message }
-  }
-
   onMount(() => {
     load()
     timer = setInterval(load, 2000) // live polling
@@ -42,9 +38,6 @@
             <div class="muted">{v.channel}</div>
           </div>
           <span class="status status-{v.status}">{v.status}</span>
-          {#if isActive(v.status)}
-            <button class="mini" on:click|preventDefault={() => stop(v.id)}>Stop</button>
-          {/if}
         </div>
         {#if isActive(v.status)}
           {@const step = currentStep(v.stage)}
