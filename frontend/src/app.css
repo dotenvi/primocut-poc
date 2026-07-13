@@ -153,7 +153,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .dot.st-running { background: var(--cue); animation: pulse 1.2s infinite; }
 .dot.st-failed { background: var(--tally); }
 .dot.st-pending { background: var(--neutral-dim); }
-.dot.st-skipped { background: transparent; border: 2px solid var(--muted); }
+.dot.st-empty { background: var(--muted); }
+.dot.st-skipped { background: transparent; border: 2px dashed var(--muted); }
 
 .pipe-details { margin-top: 16px; }
 .pipe-details summary {
@@ -177,7 +178,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 .badge.st-running { background: var(--cue-dim); color: var(--cue); }
 .badge.st-failed { background: var(--tally-dim); color: var(--tally); }
 .badge.st-pending { background: var(--neutral-dim); color: var(--muted); }
-.badge.st-skipped { background: transparent; border: 1px solid var(--muted); color: var(--muted); }
+.badge.st-empty { background: var(--neutral-dim); color: var(--muted); }
+.badge.st-skipped { background: transparent; border: 1px dashed var(--muted); color: var(--muted); }
 .pulse-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--cue); margin-right: 6px; animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 

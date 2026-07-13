@@ -50,19 +50,25 @@ export function stepDurations(stageHistory = [], now = Date.now()) {
 }
 
 // Derive each step's state from the current stage/status AND per-step evidence.
-// state ∈ 'done' | 'running' | 'failed' | 'pending' | 'skipped'
+// state ∈ 'done' | 'running' | 'failed' | 'pending' | 'empty' | 'skipped'
 //
 // A step is only marked 'done' when there is positive confirmation that it
 // produced its artifact (`completed[key] === true`) — never just because the
-// pipeline finished. This way an optional/skipped step (e.g. topics not
-// generated, or chat with no replay) is honestly shown as 'skipped' instead of
-// falsely 'done'. `completed` is a map keyed by STEP.key → boolean, built by
-// the caller from the report data.
+// pipeline finished. For a step that produced nothing we tell apart two honest
+// cases using `stageHistory` (the stages the pipeline actually entered):
+//   - 'empty'   → the stage ran but had nothing to produce (e.g. chat with no
+//                 replay). It IS in the history, just without an artifact.
+//   - 'skipped' → the stage was never entered (e.g. topics not requested).
+// `completed` is a map keyed by STEP.key → boolean, built by the caller from
+// the report data.
 export function computeSteps(stage, status, completed = {}, stageHistory = []) {
   const s = (stage || '').toLowerCase()
   const current = STEPS.findIndex((st) => s.includes(st.match))
   const active = ACTIVE_STATUSES.includes(status)
   const durations = stepDurations(stageHistory)
+  const entered = new Set(
+    (stageHistory || []).map((h) => stageKey(h.stage)).filter(Boolean)
+  )
 
   return STEPS.map((st, i) => {
     let state
@@ -74,10 +80,12 @@ export function computeSteps(stage, status, completed = {}, stageHistory = []) {
       state = 'running'
     } else if ((status === 'error' || status === 'stopped') && i === current) {
       state = 'failed'
+    } else if (active) {
+      state = 'pending' // upcoming step in a still-running pipeline
+    } else if (entered.has(st.key)) {
+      state = 'empty' // the stage ran but produced no artifact
     } else {
-      // Not confirmed and not the active/failed step: upcoming while running,
-      // otherwise it was skipped or never reached.
-      state = active ? 'pending' : 'skipped'
+      state = 'skipped' // the stage was never entered
     }
     const durationSec = durations[st.key]
     return { ...st, state, durationSec: durationSec == null ? null : durationSec }

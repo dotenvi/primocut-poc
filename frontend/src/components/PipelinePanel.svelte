@@ -14,7 +14,7 @@
 
   const badgeText = {
     done: 'Done', running: 'Processing', failed: 'Failed',
-    pending: 'Pending', skipped: 'Skipped',
+    pending: 'Pending', empty: 'No data', skipped: 'Skipped',
   }
 
   $: steps = computeSteps(stage, status, completed, stageHistory)
