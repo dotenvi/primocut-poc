@@ -241,11 +241,18 @@ recent audio, never deletes a transcript).
 
 Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations`.
 Simple migrations: base schema via `create_all` (v1) + `db/migrations/NNN_*.sql` deltas.
+The runner tolerates a duplicate-column error on `ADD COLUMN`, so column-adding deltas are
+no-ops on fresh databases (where `create_all` already added the column from the model).
 
 - `Video.status`: `queued → downloading → transcribing → analyzing → done | error`;
   **`stopped`** when interrupted (via `stop`). `reenqueue` reuses the cache; `DELETE` removes
   everything and requires resubmitting the URL to start from scratch.
 - Audio = file on disk (deletable). Transcript/topics/signals = **permanent** (database).
+- `Job.stage_history`: ordered `[{stage, at}]` transitions (JSON), one per stage change,
+  appended by `DbReporter`; a terminal `__end__` marker is recorded on failure/stop so the
+  last stage is bounded. The UI derives each stage's **duration** from the gap between
+  consecutive `at` timestamps (the running stage ticks up to *now*). Legacy jobs have an empty
+  list and simply show no durations. See the "Pipeline stages" panel below.
 
 ### API (summary)
 
@@ -421,6 +428,24 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 
 The most important section. **Never overwrite or delete an entry**: a reverted decision gets a
 **new** entry pointing to the reversal. Dates in ISO (`YYYY-MM-DD`).
+
+### 2026-07-13 · Real per-stage timing in the pipeline stages panel
+**Type:** product + technical.
+**Decision:** show each pipeline stage's **duration** in the "Pipeline stages" panel. To feed
+real durations, `Job` gains a `stage_history` JSON column (migration `003`); `DbReporter`
+appends a `{stage, at}` transition on every stage change, and failure/stop append an `__end__`
+marker. Durations are derived in the frontend (`lib/steps.js:stepDurations`) from the gaps
+between timestamps, so the running stage ticks up to *now* via the existing 2 s polling. The
+existing **list** layout (compact dot row + expandable per-stage details) is kept; the duration
+sits next to each stage's status badge.
+**Reason:** the panel didn't convey where time is spent; the durations make the GPU
+transcription stage's cost visible.
+**Rejected alternatives:** a horizontal "CI pipeline" of connected stage cards (GitHub Actions
+style) — built first, then **reverted**: it forced horizontal scrolling and read poorly at this
+width; only the durations were kept. Deriving a single total from `created_at → updated_at` (no
+per-stage breakdown); a separate `job_steps` table (heavier than a JSON column, which mirrors
+the existing `warnings` column). **Note:** legacy jobs (empty history) render without
+durations — timing only appears for runs after this change.
 
 ### 2026-07-12 · Plain Python for the MVP
 **Type:** technical.
