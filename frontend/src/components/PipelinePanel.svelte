@@ -4,10 +4,14 @@
   export let stage = ''
   export let status = 'queued'
   export let progress = 0
+  export let completed = {} // STEP.key → boolean (artifact confirmed)
 
-  const badgeText = { done: 'Done', running: 'Processing', failed: 'Failed', pending: 'Pending' }
+  const badgeText = {
+    done: 'Done', running: 'Processing', failed: 'Failed',
+    pending: 'Pending', skipped: 'Skipped',
+  }
 
-  $: steps = computeSteps(stage, status)
+  $: steps = computeSteps(stage, status, completed)
 </script>
 
 <article class="pipeline card">

@@ -61,6 +61,10 @@
     try { await api.reenqueue(id); load() } catch (e) { error = e.message }
   }
 
+  async function generateTopics() {
+    try { await api.generateTopics(id); await load() } catch (e) { error = e.message }
+  }
+
   async function stop() {
     try { await api.stop(id); load() } catch (e) { error = e.message }
   }
@@ -69,6 +73,18 @@
     if (!confirm('Delete EVERYTHING about this video? This is irreversible — to reprocess you will need to resubmit the URL.')) return
     try { await api.remove(id); location.hash = '#/videos' } catch (e) { error = e.message }
   }
+
+  // Per-step evidence (STEP.key → produced its artifact?). A step is only shown
+  // as "done" when confirmed here — never just because the pipeline finished.
+  $: completed = data
+    ? {
+        metadata: !!data.video, // report loaded ⇒ metadata ran
+        audio: data.transcript.length > 0, // audio file is ephemeral; transcript ⇒ it ran
+        transcription: data.transcript.length > 0,
+        chat: !!data.chat_signal,
+        topics: data.topics.length > 0,
+      }
+    : {}
 
   $: segs = data
     ? data.transcript.filter((s) => !query || s.text.toLowerCase().includes(query.toLowerCase()))
@@ -102,6 +118,7 @@
       stage={data.job ? data.job.stage : ''}
       status={data.video.status}
       progress={data.job ? data.job.progress : 0}
+      {completed}
     />
   {/if}
 
@@ -143,6 +160,10 @@
     <div class="card-head">
       <h3>Topics ({data.topics.length})</h3>
       <div class="card-actions">
+        <button class="mini ai" on:click={generateTopics} disabled={data.video.status === 'analyzing'}>
+          {#if data.video.status === 'analyzing'}⏳ Generating…
+          {:else}✨ {data.topics.length ? 'Regenerate' : 'Generate'} topics with AI{/if}
+        </button>
         <button class="mini" on:click={expandAll}>Expand all</button>
         <button class="mini" on:click={collapseAll}>Collapse all</button>
       </div>
@@ -164,7 +185,10 @@
       </div>
     {/each}
     {#if data.topics.length === 0}
-      <p class="muted">No topic identified.</p>
+      <p class="muted">
+        {#if data.video.status === 'analyzing'}Generating topics…
+        {:else}No topics yet — click “Generate topics with AI” to create them.{/if}
+      </p>
     {/if}
   </article>
 

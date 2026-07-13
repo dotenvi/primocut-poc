@@ -21,24 +21,36 @@ export function currentStep(stage) {
   }
 }
 
-// Derive each step's state from the current stage/status.
-// state ∈ 'done' | 'running' | 'failed' | 'pending'
-export function computeSteps(stage, status) {
+const ACTIVE_STATUSES = ['queued', 'downloading', 'transcribing', 'analyzing']
+
+// Derive each step's state from the current stage/status AND per-step evidence.
+// state ∈ 'done' | 'running' | 'failed' | 'pending' | 'skipped'
+//
+// A step is only marked 'done' when there is positive confirmation that it
+// produced its artifact (`completed[key] === true`) — never just because the
+// pipeline finished. This way an optional/skipped step (e.g. topics not
+// generated, or chat with no replay) is honestly shown as 'skipped' instead of
+// falsely 'done'. `completed` is a map keyed by STEP.key → boolean, built by
+// the caller from the report data.
+export function computeSteps(stage, status, completed = {}) {
   const s = (stage || '').toLowerCase()
-  let current = STEPS.findIndex((st) => s.includes(st.match))
+  const current = STEPS.findIndex((st) => s.includes(st.match))
+  const active = ACTIVE_STATUSES.includes(status)
 
   return STEPS.map((st, i) => {
     let state
-    if (status === 'done') {
-      state = 'done'
-    } else if (current < 0) {
-      state = 'pending' // still queued
-    } else if (i < current) {
-      state = 'done'
-    } else if (i === current) {
-      state = status === 'error' || status === 'stopped' ? 'failed' : 'running'
+    if (completed[st.key]) {
+      state = 'done' // confirmed: the artifact exists
+    } else if (active && current >= 0 && i < current) {
+      state = 'done' // already passed this step in the current run
+    } else if (active && i === current) {
+      state = 'running'
+    } else if ((status === 'error' || status === 'stopped') && i === current) {
+      state = 'failed'
     } else {
-      state = 'pending'
+      // Not confirmed and not the active/failed step: upcoming while running,
+      // otherwise it was skipped or never reached.
+      state = active ? 'pending' : 'skipped'
     }
     return { ...st, state }
   })

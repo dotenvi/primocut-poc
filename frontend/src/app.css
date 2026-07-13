@@ -84,6 +84,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .dot.st-running { background: var(--amber); animation: pulse 1.2s infinite; }
 .dot.st-failed, .badge.st-failed { background: #ff6b6b; }
 .dot.st-pending { background: rgba(255,255,255,0.12); }
+.dot.st-skipped { background: transparent; border: 2px solid var(--muted); }
 .pipe-details { margin-top: 14px; }
 .pipe-details summary { cursor: pointer; color: var(--muted); font-size: 0.9em; }
 .pipe-details ul { list-style: none; padding: 0; margin: 12px 0 0; }
@@ -91,6 +92,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .badge { font-size: 0.72em; padding: 2px 9px; border-radius: 20px; text-transform: uppercase; color: #0c0e12; font-weight: 600; }
 .badge.st-running { background: var(--amber); color: #0c0e12; }
 .badge.st-pending { background: rgba(255,255,255,0.12); color: var(--muted); }
+.badge.st-skipped { background: transparent; border: 1px solid var(--muted); color: var(--muted); }
 .pulse-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--amber); margin-right: 6px; animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
@@ -98,6 +100,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .mini:hover { color: var(--fg); }
 .btn.danger, .mini.danger { border-color: #a33; color: #ff8a8a; background: transparent; }
 .btn.danger:hover, .mini.danger:hover { background: #3a1414; }
+.mini.ai { border-color: var(--accent); color: var(--accent); }
+.mini.ai:hover:not(:disabled) { background: rgba(224, 96, 58, 0.12); }
+.mini:disabled { opacity: 0.55; cursor: default; }
 
 .report-head .actions { margin-top: 12px; display: flex; gap: 10px; }
 .processing { color: var(--accent); }

@@ -19,6 +19,7 @@ export const api = {
   list: () => req('GET', '/videos'),
   detail: (id) => req('GET', `/videos/${id}`),
   report: (id) => req('GET', `/videos/${id}/report`),
+  generateTopics: (id) => req('POST', `/videos/${id}/topics`),
   markTopic: (id, tid, status) => req('POST', `/videos/${id}/topics/${tid}`, { status }),
   reenqueue: (id) => req('POST', `/videos/${id}/reenqueue`),
   stop: (id) => req('POST', `/videos/${id}/stop`),
