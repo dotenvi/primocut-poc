@@ -5,12 +5,9 @@ transcript and chat activity. Pipeline: **audio → chat replay → transcriptio
 extraction (the LLM analysis) is opt-in: pass `--create-topics` on the CLI, or use the
 **Generate topics with AI** button in the web report.
 
-Source of truth: [`docs/PRIMOCUT.md`](docs/PRIMOCUT.md).
-**Phase 1 (web MVP): [`docs/FASE1-MVP.md`](docs/FASE1-MVP.md).**
-Phase 0 summary (handoff): [`docs/FASE0-RESUMO.md`](docs/FASE0-RESUMO.md).
-Phase 0 plan: [`docs/FASE0-SPIKE-CLI-PLANO.md`](docs/FASE0-SPIKE-CLI-PLANO.md).
-Execution guide: [`docs/FASE0-STATUS-E-EXECUCAO.md`](docs/FASE0-STATUS-E-EXECUCAO.md).
-Fallback catalog: [`docs/FALLBACKS.md`](docs/FALLBACKS.md).
+Product source of truth: [`docs/PRIMOCUT.md`](docs/PRIMOCUT.md).
+Development source of truth (roadmap, state, run guide, architecture, resilience,
+decision log): [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Setup (native Python tooling)
 
@@ -59,7 +56,7 @@ primocut worker    # processes the queue (terminal 1)
 primocut serve     # API + UI at http://127.0.0.1:8000 (terminal 2)
 ```
 
-Details in [`docs/FASE1-MVP.md`](docs/FASE1-MVP.md).
+Full run guide in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Per-module tests (isolated, no GPU/network)
 

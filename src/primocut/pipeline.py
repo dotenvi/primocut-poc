@@ -5,7 +5,7 @@ topics, opt-in via `create_topics`). `run_stages` is the core reused by CLI and
 worker, parameterized by a
 `Store` (cache/persistence) and a `ProgressReporter`. `run_pipeline` is the CLI
 wrapper (Phase 0): uses `FileStore`+`LogReporter` and writes the Markdown report.
-All resilience/degradation (FALLBACKS.md) is preserved.
+All resilience/degradation (see the Resilience section of docs/DEVELOPMENT.md) is preserved.
 """
 
 from __future__ import annotations

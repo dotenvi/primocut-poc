@@ -2,6 +2,10 @@
 
 **Pri**nt **Mo**ney with **Cut** — automation of YouTube clip channels.
 
+> This is the **product** source of truth (the what and why). For how it is built and run —
+> roadmap, current state, run guide, architecture, resilience and the decision log — see
+> [`DEVELOPMENT.md`](./DEVELOPMENT.md).
+
 ## Vision
 
 The application receives the URL of a YouTube live (podcast, stream), downloads the audio and the chat replay, transcribes it with timestamps and uses AI to generate an index of the topics that were discussed. The user reads the report — instead of watching 3-4 hours of video — and identifies the passages they want to turn into clips.
