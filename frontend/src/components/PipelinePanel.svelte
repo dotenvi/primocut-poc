@@ -1,10 +1,14 @@
 <script>
+  import { createEventDispatcher } from 'svelte'
   import { computeSteps } from '../lib/steps.js'
 
   export let stage = ''
   export let status = 'queued'
   export let progress = 0
   export let completed = {} // STEP.key → boolean (artifact confirmed)
+  export let active = false // pipeline still running → show the Stop button
+
+  const dispatch = createEventDispatcher()
 
   const badgeText = {
     done: 'Done', running: 'Processing', failed: 'Failed',
@@ -15,7 +19,12 @@
 </script>
 
 <article class="pipeline card">
-  <h3>Pipeline stages</h3>
+  <div class="card-head">
+    <h3>Pipeline stages</h3>
+    {#if active}
+      <button class="mini danger" on:click={() => dispatch('stop')}>Stop</button>
+    {/if}
+  </div>
 
   {#if status !== 'done'}
     <div class="pbar" title={`${progress}%`}>

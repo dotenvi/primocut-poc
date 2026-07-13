@@ -86,6 +86,10 @@
       }
     : {}
 
+  // The pipeline is "running" while the video sits in an active status (queued →
+  // analyzing). Empty/non-interactive sections are hidden until it finishes.
+  $: running = data ? isActive(data.video.status) : false
+
   $: segs = data
     ? data.transcript.filter((s) => !query || s.text.toLowerCase().includes(query.toLowerCase()))
     : []
@@ -102,15 +106,13 @@
 {:else}
   <header class="report-head">
     <Player bind:this={playerRef} videoId={data.video.id} />
-    <div class="actions">
-      <a class="btn" href={api.exportUrl(id)} download>Export cuts (JSON)</a>
-      <button class="btn ghost" on:click={reprocess}>Reprocess</button>
-      {#if isActive(data.video.status)}
-        <button class="btn ghost" on:click={stop}>Stop</button>
-      {:else}
+    {#if !running}
+      <div class="actions">
+        <a class="btn" href={api.exportUrl(id)} download>Export cuts (JSON)</a>
+        <button class="btn ghost" on:click={reprocess}>Reprocess</button>
         <button class="btn danger" on:click={remove}>Delete</button>
-      {/if}
-    </div>
+      </div>
+    {/if}
   </header>
 
   {#if pending() || data.job}
@@ -118,7 +120,9 @@
       stage={data.job ? data.job.stage : ''}
       status={data.video.status}
       progress={data.job ? data.job.progress : 0}
+      active={running}
       {completed}
+      on:stop={stop}
     />
   {/if}
 
@@ -129,9 +133,9 @@
     </section>
   {/if}
 
-  <section>
-    <h2>Chat activity</h2>
-    {#if data.chat_signal}
+  {#if !running && data.chat_signal}
+    <section>
+      <h2>Chat activity</h2>
       <div class="spark">
         {#each data.chat_signal.per_minute as b}
           <div
@@ -151,57 +155,57 @@
       {:else}
         <p class="muted">No significant peak.</p>
       {/if}
-    {:else}
-      <p class="muted">No chat replay.</p>
-    {/if}
-  </section>
+    </section>
+  {/if}
 
-  <article class="card topics-card">
-    <div class="card-head">
-      <h3>Topics ({data.topics.length})</h3>
-      <div class="card-actions">
-        <button class="mini ai" on:click={generateTopics} disabled={data.video.status === 'analyzing'}>
-          {#if data.video.status === 'analyzing'}⏳ Generating…
-          {:else}✨ {data.topics.length ? 'Regenerate' : 'Generate'} topics with AI{/if}
-        </button>
-        <button class="mini" on:click={expandAll}>Expand all</button>
-        <button class="mini" on:click={collapseAll}>Collapse all</button>
-      </div>
-    </div>
-    {#each data.topics as t (t.id)}
-      <div class="topic">
-        <div class="topic-head">
-          <button class="disclosure" on:click={() => toggle(t.id)} aria-expanded={!!expanded[t.id]}>
-            <span class="caret">{expanded[t.id] ? '▾' : '▸'}</span>
-            <b>{t.title}</b>
+  {#if !running}
+    <article class="card topics-card">
+      <div class="card-head">
+        <h3>Topics ({data.topics.length})</h3>
+        <div class="card-actions">
+          <button class="mini ai" on:click={generateTopics}>
+            ✨ {data.topics.length ? 'Regenerate' : 'Generate'} topics with AI
           </button>
-          {#if t.fire}<span class="fire" title="coincides with a chat peak">🔥</span>{/if}
-          <button class="mini watch" on:click={() => watch(t)}>▶ Watch</button>
+          {#if data.topics.length}
+            <button class="mini" on:click={expandAll}>Expand all</button>
+            <button class="mini" on:click={collapseAll}>Collapse all</button>
+          {/if}
         </div>
-        <div class="topic-meta muted">{t.start_hms}–{t.end_hms} · score {t.score.toFixed(2)}</div>
-        {#if expanded[t.id]}
-          <div class="topic-body muted">{t.summary}</div>
-        {/if}
       </div>
-    {/each}
-    {#if data.topics.length === 0}
-      <p class="muted">
-        {#if data.video.status === 'analyzing'}Generating topics…
-        {:else}No topics yet — click “Generate topics with AI” to create them.{/if}
-      </p>
-    {/if}
-  </article>
-
-  <section>
-    <h2>Transcript</h2>
-    <input class="search" placeholder="search the transcript…" bind:value={query} />
-    <div class="transcript">
-      {#each segs as s (s.index)}
-        <p>
-          <button class="ts" on:click={() => seekTo(s.start, s.youtube_url)}>{s.start_hms}</button>
-          {s.text}
-        </p>
+      {#each data.topics as t (t.id)}
+        <div class="topic">
+          <div class="topic-head">
+            <button class="disclosure" on:click={() => toggle(t.id)} aria-expanded={!!expanded[t.id]}>
+              <span class="caret">{expanded[t.id] ? '▾' : '▸'}</span>
+              <b>{t.title}</b>
+            </button>
+            {#if t.fire}<span class="fire" title="coincides with a chat peak">🔥</span>{/if}
+            <button class="mini watch" on:click={() => watch(t)}>▶ Watch</button>
+          </div>
+          <div class="topic-meta muted">{t.start_hms}–{t.end_hms} · score {t.score.toFixed(2)}</div>
+          {#if expanded[t.id]}
+            <div class="topic-body muted">{t.summary}</div>
+          {/if}
+        </div>
       {/each}
-    </div>
-  </section>
+      {#if data.topics.length === 0}
+        <p class="muted">No topics yet — click “Generate topics with AI” to create them.</p>
+      {/if}
+    </article>
+  {/if}
+
+  {#if !running && data.transcript.length}
+    <section>
+      <h2>Transcript</h2>
+      <input class="search" placeholder="search the transcript…" bind:value={query} />
+      <div class="transcript">
+        {#each segs as s (s.index)}
+          <p>
+            <button class="ts" on:click={() => seekTo(s.start, s.youtube_url)}>{s.start_hms}</button>
+            {s.text}
+          </p>
+        {/each}
+      </div>
+    </section>
+  {/if}
 {/if}
