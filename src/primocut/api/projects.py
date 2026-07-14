@@ -1,0 +1,166 @@
+"""API router for Phase 2: projects CRUD and channel registration/detachment.
+
+Built as a factory so it can receive the app's dependency callables without a
+circular import with `app.py`.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Callable
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from ..db import competitors as crepo
+from ..youtube.client import YouTubeError
+
+
+class ProjectIn(BaseModel):
+    name: str
+    description: str = ""
+
+
+class ProjectPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    active: bool | None = None
+
+
+class ChannelIn(BaseModel):
+    url: str
+
+
+def _project_dict(row) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "description": row.description,
+        "active": row.active,
+        "created_at": row.created_at.isoformat(),
+    }
+
+
+def _channel_dict(row) -> dict[str, Any]:
+    return {
+        "channel_id": row.channel_id,
+        "handle": row.handle,
+        "title": row.title,
+        "active": row.active,
+        "backfill": {
+            "state": row.backfill_state,
+            "done": row.backfill_done,
+            "total": row.backfill_total,
+            "error": row.backfill_error,
+        },
+    }
+
+
+def build_projects_router(
+    *,
+    get_db: Callable,
+    get_queue_dep: Callable,
+    get_settings_dep: Callable,
+    get_youtube_client_dep: Callable,
+) -> APIRouter:
+    router = APIRouter(prefix="/api")
+
+    @router.post("/projects", status_code=201)
+    def create_project(body: ProjectIn, db=Depends(get_db)) -> dict:
+        with db.session() as s:
+            try:
+                row = crepo.create_project(s, body.name, body.description)
+            except crepo.ProjectExistsError:
+                raise HTTPException(status_code=409, detail="project name already exists")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            return _project_dict(row)
+
+    @router.get("/projects")
+    def list_projects(db=Depends(get_db)) -> list[dict]:
+        with db.session() as s:
+            return [
+                {**_project_dict(p), "channel_count": len(crepo.list_project_channels(s, p.id))}
+                for p in crepo.list_projects(s)
+            ]
+
+    @router.get("/projects/{project_id}")
+    def project_detail(project_id: int, db=Depends(get_db)) -> dict:
+        with db.session() as s:
+            row = crepo.get_project(s, project_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="project not found")
+            channels = [_channel_dict(c) for c in crepo.list_project_channels(s, project_id)]
+            return {**_project_dict(row), "channels": channels}
+
+    @router.patch("/projects/{project_id}")
+    def patch_project(project_id: int, body: ProjectPatch, db=Depends(get_db)) -> dict:
+        with db.session() as s:
+            row = crepo.update_project(
+                s,
+                project_id,
+                name=body.name,
+                description=body.description,
+                active=body.active,
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="project not found")
+            return _project_dict(row)
+
+    @router.delete("/projects/{project_id}")
+    def remove_project(project_id: int, db=Depends(get_db)) -> dict:
+        with db.session() as s:
+            if not crepo.delete_project(s, project_id):
+                raise HTTPException(status_code=404, detail="project not found")
+        return {"project_id": project_id}
+
+    @router.get("/projects/{project_id}/channels")
+    def list_channels(project_id: int, db=Depends(get_db)) -> list[dict]:
+        with db.session() as s:
+            if crepo.get_project(s, project_id) is None:
+                raise HTTPException(status_code=404, detail="project not found")
+            return [_channel_dict(c) for c in crepo.list_project_channels(s, project_id)]
+
+    @router.post("/projects/{project_id}/channels", status_code=201)
+    def add_channel(
+        project_id: int,
+        body: ChannelIn,
+        db=Depends(get_db),
+        queue=Depends(get_queue_dep),
+        settings=Depends(get_settings_dep),
+        client=Depends(get_youtube_client_dep),
+    ) -> dict:
+        from ..worker.channels import register_channel
+
+        try:
+            return register_channel(
+                project_id,
+                body.url,
+                settings=settings,
+                database=db,
+                queue=queue,
+                client=client,
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="project not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except YouTubeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+    @router.delete("/projects/{project_id}/channels/{channel_id}")
+    def detach_channel_endpoint(
+        project_id: int,
+        channel_id: str,
+        db=Depends(get_db),
+        settings=Depends(get_settings_dep),
+    ) -> dict:
+        from ..worker.channels import detach_channel
+
+        try:
+            return detach_channel(
+                project_id, channel_id, settings=settings, database=db
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="project not found")
+
+    return router

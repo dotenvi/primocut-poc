@@ -37,6 +37,12 @@ def get_settings_dep():
     return get_settings()
 
 
+def get_youtube_client_dep():
+    """None → `register_channel` builds a real client from settings. Tests
+    override this to inject a fake YouTube client (no network)."""
+    return None
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="PRIMOCUT", version="1.0")
 
@@ -115,6 +121,17 @@ def create_app() -> FastAPI:
                 status_code=409,
                 detail="video is being processed; stop it before deleting",
             )
+
+    from .projects import build_projects_router
+
+    app.include_router(
+        build_projects_router(
+            get_db=get_db,
+            get_queue_dep=get_queue_dep,
+            get_settings_dep=get_settings_dep,
+            get_youtube_client_dep=get_youtube_client_dep,
+        )
+    )
 
     _mount_static(app)
     return app
