@@ -147,6 +147,18 @@ def build_projects_router(
         except YouTubeError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
 
+    @router.get("/projects/{project_id}/dashboard")
+    def project_dashboard(
+        project_id: int, db=Depends(get_db), settings=Depends(get_settings_dep)
+    ) -> dict:
+        from ..metrics import service as metrics_service
+
+        with db.session() as s:
+            data = metrics_service.project_dashboard(s, project_id, settings=settings)
+        if data is None:
+            raise HTTPException(status_code=404, detail="project not found")
+        return data
+
     @router.delete("/projects/{project_id}/channels/{channel_id}")
     def detach_channel_endpoint(
         project_id: int,

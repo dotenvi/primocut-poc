@@ -122,6 +122,7 @@ def create_app() -> FastAPI:
                 detail="video is being processed; stop it before deleting",
             )
 
+    from .metrics import build_metrics_router
     from .projects import build_projects_router
 
     app.include_router(
@@ -131,6 +132,9 @@ def create_app() -> FastAPI:
             get_settings_dep=get_settings_dep,
             get_youtube_client_dep=get_youtube_client_dep,
         )
+    )
+    app.include_router(
+        build_metrics_router(get_db=get_db, get_settings_dep=get_settings_dep)
     )
 
     _mount_static(app)
