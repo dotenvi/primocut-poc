@@ -95,6 +95,17 @@ class Settings(BaseSettings):
     youtube_short_max_seconds: int = 60
     # How many recent uploads to backfill when a channel is new to the system.
     youtube_backfill_limit: int = 120
+    # A video is "recent" (part of the 6h snapshot pass) for this many days.
+    youtube_recent_days: int = 7
+    # Top-of-uploads window scanned each cycle to detect newly published videos.
+    youtube_uploads_scan_limit: int = 15
+
+    # --- Phase 2: snapshot scheduler (rq-scheduler) ---
+    # Daily pass over ALL videos of active channels; 6-hourly pass over videos
+    # younger than `youtube_recent_days`. The daily hour is offset from the 6h
+    # grid so the two never fire in the same minute.
+    snapshot_daily_cron: str = "0 3 * * *"
+    snapshot_recent_cron: str = "0 */6 * * *"
 
 
 def get_settings() -> Settings:

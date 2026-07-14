@@ -16,10 +16,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .models import (
+    ChannelSnapshotRow,
     CompetitorChannelRow,
     CompetitorVideoRow,
+    PackagingChangeRow,
     ProjectChannelRow,
     ProjectRow,
+    VideoSnapshotRow,
 )
 
 
@@ -234,3 +237,113 @@ def list_channel_videos(s: Session, channel_id: str) -> list[CompetitorVideoRow]
             .order_by(CompetitorVideoRow.published_at.desc())
         ).scalars()
     )
+
+
+# ------------------------- Continuous collection (snapshots) -------------------------
+
+
+def list_active_channels(s: Session) -> list[CompetitorChannelRow]:
+    """Channels currently collected: linked to at least one project. Orphans
+    (active=false) are excluded, so they fall out of every snapshot cycle."""
+    return list(
+        s.execute(
+            select(CompetitorChannelRow)
+            .where(CompetitorChannelRow.active.is_(True))
+            .order_by(CompetitorChannelRow.channel_id)
+        ).scalars()
+    )
+
+
+def list_channel_video_ids(
+    s: Session, channel_id: str, *, since: datetime | None = None
+) -> list[str]:
+    """Video IDs of a channel. With `since`, only videos published at/after it
+    (a NULL published_at is excluded from the recent window)."""
+    stmt = select(CompetitorVideoRow.video_id).where(
+        CompetitorVideoRow.channel_id == channel_id
+    )
+    if since is not None:
+        stmt = stmt.where(CompetitorVideoRow.published_at.is_not(None)).where(
+            CompetitorVideoRow.published_at >= since
+        )
+    return list(s.execute(stmt).scalars())
+
+
+def add_channel_snapshot(
+    s: Session,
+    *,
+    channel_id: str,
+    captured_at: datetime,
+    subscribers: int,
+    total_views: int,
+    video_count: int,
+) -> ChannelSnapshotRow:
+    row = ChannelSnapshotRow(
+        channel_id=channel_id,
+        captured_at=captured_at,
+        subscribers=subscribers,
+        total_views=total_views,
+        video_count=video_count,
+    )
+    s.add(row)
+    return row
+
+
+def add_video_snapshot(
+    s: Session,
+    *,
+    video_id: str,
+    captured_at: datetime,
+    views: int,
+    likes: int,
+    comments: int,
+) -> VideoSnapshotRow:
+    row = VideoSnapshotRow(
+        video_id=video_id,
+        captured_at=captured_at,
+        views=views,
+        likes=likes,
+        comments=comments,
+    )
+    s.add(row)
+    return row
+
+
+def add_packaging_change(
+    s: Session,
+    *,
+    video_id: str,
+    field: str,
+    old_value: str,
+    new_value: str,
+    detected_at: datetime,
+) -> PackagingChangeRow:
+    row = PackagingChangeRow(
+        video_id=video_id,
+        field=field,
+        old_value=old_value,
+        new_value=new_value,
+        detected_at=detected_at,
+    )
+    s.add(row)
+    return row
+
+
+def update_video_packaging(
+    s: Session,
+    video_id: str,
+    *,
+    title: str | None = None,
+    thumbnail_url: str | None = None,
+    thumbnail_hash: str | None = None,
+) -> None:
+    """Update the last-known packaging state stored on the video row."""
+    row = s.get(CompetitorVideoRow, video_id)
+    if row is None:
+        return
+    if title is not None:
+        row.title = title
+    if thumbnail_url is not None:
+        row.thumbnail_url = thumbnail_url
+    if thumbnail_hash is not None:
+        row.thumbnail_hash = thumbnail_hash

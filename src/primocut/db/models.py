@@ -13,6 +13,7 @@ from sqlalchemy import (
     Boolean,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -185,3 +186,62 @@ class CompetitorVideoRow(Base):
     thumbnail_url: Mapped[str] = mapped_column(String, default="")
     thumbnail_hash: Mapped[str] = mapped_column(String, default="")
     created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+# ------------------------- Phase 2: continuous collection (snapshots) -------------------------
+#
+# Deterministic, quota-accounted time series collected on a schedule. Outlier
+# scores and views-per-hour are computed on read (over these snapshots), never
+# stored. Same create_all mechanism as the tables above (no migration file).
+
+
+class ChannelSnapshotRow(Base):
+    """Point-in-time channel stats captured by a collection cycle."""
+
+    __tablename__ = "channel_snapshots"
+    __table_args__ = (Index("ix_channel_snapshots_channel_captured", "channel_id", "captured_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    channel_id: Mapped[str] = mapped_column(
+        ForeignKey("competitor_channels.channel_id", ondelete="CASCADE")
+    )
+    captured_at: Mapped[datetime] = mapped_column(default=_now)
+    subscribers: Mapped[int] = mapped_column(Integer, default=0)
+    total_views: Mapped[int] = mapped_column(Integer, default=0)
+    video_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class VideoSnapshotRow(Base):
+    """Point-in-time video stats. The (video_id, captured_at) index powers the
+    per-video time-series reads (VPH, outlier baselines) added in a later step."""
+
+    __tablename__ = "video_snapshots"
+    __table_args__ = (Index("ix_video_snapshots_video_captured", "video_id", "captured_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[str] = mapped_column(
+        ForeignKey("competitor_videos.video_id", ondelete="CASCADE")
+    )
+    captured_at: Mapped[datetime] = mapped_column(default=_now)
+    views: Mapped[int] = mapped_column(Integer, default=0)
+    likes: Mapped[int] = mapped_column(Integer, default=0)
+    comments: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PackagingChangeRow(Base):
+    """A detected title/thumbnail change (packaging). vph_before/vph_after are
+    filled by the metrics step (Phase 2 step 3); NULL at collection time."""
+
+    __tablename__ = "packaging_changes"
+    __table_args__ = (Index("ix_packaging_changes_video_detected", "video_id", "detected_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[str] = mapped_column(
+        ForeignKey("competitor_videos.video_id", ondelete="CASCADE")
+    )
+    field: Mapped[str] = mapped_column(String)  # "title" | "thumbnail"
+    old_value: Mapped[str] = mapped_column(Text, default="")
+    new_value: Mapped[str] = mapped_column(Text, default="")
+    detected_at: Mapped[datetime] = mapped_column(default=_now)
+    vph_before: Mapped[float | None] = mapped_column(Float, default=None)
+    vph_after: Mapped[float | None] = mapped_column(Float, default=None)
