@@ -64,7 +64,7 @@ Deliver, from a URL, a navigable report containing:
 ## Technical guidelines
 
 1. **Project language is English**: every comment, docstring, identifier, log/error message and user-facing string is written in English, and so is the product documentation. Any new code follows the same rule.
-2. **TranscriptionEngine as an interface**: the transcription worker must sit behind an abstraction so faster-whisper can be swapped for WhisperX (Phase 2) without touching the rest of the system.
+2. **TranscriptionEngine as an interface**: the transcription worker must sit behind an abstraction so faster-whisper can be swapped for WhisperX (Phase 3) without touching the rest of the system.
 3. **Timestamps are never invented**: the LLM analysis must reference exclusively timestamps that exist in the transcript. Structure the prompt/data so the LLM selects segments, rather than generating numbers.
 4. **Long transcripts**: 3-4h lives exceed the LLM's useful context — process them in overlapping windows and consolidate the topics.
 5. **Chat is an optional signal**: not every live preserves the chat replay; its absence must not block the pipeline. Peak detection by message density per minute (z-score) and reaction markers (laughs "KKKK", emotes).
@@ -76,5 +76,12 @@ Deliver, from a URL, a navigable report containing:
 
 - **Phase 0 — CLI spike:** command-line script: URL → audio → transcription → chat → topics in Markdown. Goal: validate GPU on WSL2, the quality of the macro-topic segmentation, and chat peak detection.
 - **Phase 1 — MVP:** queue + database + web UI + navigable report.
-- **Phase 2 — Assisted cutting:** automatic clip generation with FFmpeg; evaluate WhisperX (word-level timestamps + diarization).
-- **Phase 3 — Publishing:** AI titles/descriptions, vertical format, upload via the YouTube API, multi-user.
+- **Phase 2 — Competitor channel modeling:** given a user-provided set of competitor
+  channels, continuously collect **public** performance data and reveal what is working in the
+  niche — outlier videos, packaging patterns (title/thumbnail), posting strategy and winning
+  topics — to guide PRIMOCUT's editorial decisions. Channels are supplied by the user (no
+  niche-wide channel discovery). **Out of scope:** anything that depends on private YouTube
+  Analytics (CTR, retention, impressions — unavailable for third-party channels), and clip
+  generation/WhisperX (moved to Phase 3).
+- **Phase 3 — Assisted cutting:** automatic clip generation with FFmpeg; evaluate WhisperX (word-level timestamps + diarization).
+- **Phase 4 — Publishing:** AI titles/descriptions, vertical format, upload via the YouTube API, multi-user.

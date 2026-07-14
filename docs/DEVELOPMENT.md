@@ -404,10 +404,17 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 - **Phase 1 — Web MVP ✅ (done / current base).** Queue (RQ+Redis) + database (SQLite) + API
   (FastAPI) + navigable UI (Svelte) + navigable report +
   embedded player with seek + opt-in topic generation.
-- **Phase 2 — Assisted cutting (next).** Automatic clip generation with FFmpeg; evaluate
+- **Phase 2 — Competitor channel modeling (next).** Given a **user-provided** set of competitor
+  channels, continuously collect **public** performance data and reveal what is working in the
+  niche — outlier videos, packaging patterns (title/thumbnail), posting strategy and winning
+  topics — to guide PRIMOCUT's editorial decisions. Channels are supplied by the user (no
+  niche-wide channel discovery). **Out of scope:** anything that depends on private YouTube
+  Analytics (CTR, retention, impressions — unavailable for third-party channels); clip
+  generation/WhisperX (now Phase 3). See the [2026-07-14 decision](#2026-07-14--phase-2-redefined-competitor-channel-modeling-cuttingpublishing-shift-to-34).
+- **Phase 3 — Assisted cutting.** Automatic clip generation with FFmpeg; evaluate
   **WhisperX** (word-level timestamps + diarization). The `TranscriptionEngine` interface
   exists precisely so WhisperX can be plugged in without touching the rest of the system.
-- **Phase 3 — Publishing.** AI titles/descriptions, vertical format, upload via the YouTube
+- **Phase 4 — Publishing.** AI titles/descriptions, vertical format, upload via the YouTube
   API, multi-user.
 
 ---
@@ -416,6 +423,27 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 
 The most important section. **Never overwrite or delete an entry**: a reverted decision gets a
 **new** entry pointing to the reversal. Dates in ISO (`YYYY-MM-DD`).
+
+### 2026-07-14 · Phase 2 redefined: competitor channel modeling (cutting/publishing shift to 3/4)
+**Type:** product/business.
+**Decision:** Phase 2 is redefined from "Assisted cutting" to **Competitor channel modeling**.
+Given a **user-provided** set of competitor channels, PRIMOCUT continuously collects **public**
+performance data and surfaces what is working in the niche — outlier videos, packaging patterns
+(title/thumbnail), posting cadence and winning topics — to inform editorial decisions. The former
+Phase 2 (assisted cutting: FFmpeg clip generation + WhisperX evaluation) moves to **Phase 3**, and
+publishing moves to **Phase 4**.
+**Scope:** channels are supplied by the user (no niche-wide channel discovery); data is **public
+only**.
+**Out of scope — by decision, not just "later":** anything that depends on **private YouTube
+Analytics** (CTR, retention, impressions), which is structurally **unavailable for third-party
+channels**; global channel discovery; and clip generation/WhisperX (now Phase 3).
+**Reason:** before investing in cutting/rendering, understand the niche's demand and packaging from
+real competitor performance, so the editorial choices PRIMOCUT already surfaces (topics / clip
+candidates) are grounded in what actually performs. Public data is enough for the outlier and
+packaging signal; the private-analytics metrics simply cannot be obtained for other channels, so
+the phase is scoped around what is collectable.
+**Supersedes:** the prior roadmap ordering (Phase 2 = assisted cutting, Phase 3 = publishing); both
+shift down one and keep their content.
 
 ### 2026-07-13 · Audio is ephemeral; `data/` holds only the DB (reverses 2026-07-12 retention)
 **Type:** technical.
@@ -483,7 +511,7 @@ hallucinates timestamps).
 **Decision:** transcribe with faster-whisper `large-v3-turbo`, `device=cuda`, behind the
 `TranscriptionEngine` interface. No CPU fallback.
 **Reason:** PT-BR quality + speed on the RTX 3070 Ti (8 GB); run 100% locally with no
-transcription API cost. The interface lets WhisperX replace it in Phase 2 without touching the
+transcription API cost. The interface lets WhisperX replace it in Phase 3 without touching the
 rest.
 **Rejected alternatives:** distil models (English-only, unusable for PT-BR); **CPU fallback**
 (too slow for 3-4 h lives — better to abort with guidance). Instead of CPU, the `compute_type`
