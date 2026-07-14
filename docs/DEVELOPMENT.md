@@ -40,8 +40,20 @@ re-registering a known channel only links it (no re-collection). Detaching a cha
 deleting a project — always preserves channel/video data and deactivates a channel that has
 become orphaned from every project. The YouTube client accounts quota per operation
 (`videos.list` batches up to 50 IDs = 1 unit) and `doctor` validates the key with a real,
-cheap call. **Not yet built:** scheduled snapshots, metrics/outlier engine, AI enrichment
-and Phase 2 UI.
+cheap call.
+
+**Continuous collection** is also in place: an rq-scheduler process (`primocut scheduler`) runs
+two cadences of the same `snapshot_cycle` — a **daily** pass over all videos of active channels
+and a **6-hourly** pass over videos younger than 7 days. Each cycle writes `channel_snapshots`
+(subscribers, total views, video count) and `video_snapshots` (views, likes, comments; indexed
+by `(video_id, captured_at)`), detects **new uploads** (top of the uploads playlist → added to
+the 6h cycle) and **packaging changes** (title by string; thumbnail by **byte hash** — the URL
+is not trusted — recorded in `packaging_changes`, with `vph_before/after` left NULL for the
+metrics step). Collection is per-channel isolated (a failing channel is logged and skipped, the
+cycle never aborts), orphan channels are excluded, and quota is logged per cycle.
+`primocut competitors snapshot` runs a cycle inline for manual testing. **Not yet built:**
+metrics/outlier engine (VPH, baselines, brackets — computed on read over these snapshots), AI
+enrichment and Phase 2 UI.
 
 The pipeline runs, in order: **audio (yt-dlp → FFmpeg 16 kHz mono) → chat replay (optional)
 → transcription (faster-whisper `large-v3-turbo`, GPU) → analysis (LLM, macro topics)**.
@@ -220,6 +232,25 @@ A channel that is new to the system triggers a backfill of its last 120 uploads;
 already known is only linked (global dedup, no re-collection). Detaching a channel that ends
 up orphaned from every project deactivates it (`active=false`) but keeps all its data.
 
+**Continuous collection** (snapshots). Start the scheduler alongside the worker; it enqueues the
+snapshot cycles onto the same queue (Redis must be up):
+
+```bash
+primocut scheduler     # daily pass (all videos) + 6h pass (videos < 7 days), on cron
+```
+
+The daily pass (`0 3 * * *`) snapshots every video of every active channel; the 6h pass
+(`0 */6 * * *`) snapshots only videos younger than `PRIMOCUT_YOUTUBE_RECENT_DAYS` (7). Both
+also detect new uploads and packaging changes. Cadence and windows are configurable
+(`PRIMOCUT_SNAPSHOT_DAILY_CRON`, `PRIMOCUT_SNAPSHOT_RECENT_CRON`, `PRIMOCUT_YOUTUBE_RECENT_DAYS`).
+Run one cycle by hand (no scheduler/worker needed) for testing:
+
+```bash
+primocut competitors snapshot                      # all active channels, all videos
+primocut competitors snapshot --scope recent       # only videos < 7 days old
+primocut competitors snapshot --channel <UC...>     # a single channel
+```
+
 ### 2.9 Tests
 
 ```bash
@@ -242,7 +273,10 @@ The suite also covers (Phase 1): migrations/DAO, job state transitions, **idempo
 re-enqueue (cache respected)** and API endpoints. Phase 2 foundation: YouTube client with
 **quota accounting** (fully faked, no network), channel resolution, backfill of 120,
 **cross-project dedup**, detach/delete **data preservation**, **orphan deactivation**, and
-the projects/competitors API + CLI.
+the projects/competitors API + CLI. Phase 2 continuous collection: **frequency selection**
+(daily vs 6h), snapshot recording, **new-video detection**, **title change**, **thumbnail
+change by byte hash under an unchanged URL**, **per-channel isolation**, orphan exclusion,
+per-cycle quota, and idempotent scheduler registration (all faked, no network).
 
 ---
 
@@ -275,8 +309,10 @@ the projects/competitors API + CLI.
 
 ### Database (SQLite)
 
-Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations` and the Phase 2
-foundation `projects, competitor_channels, project_channels, competitor_videos`.
+Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations`, the Phase 2
+foundation `projects, competitor_channels, project_channels, competitor_videos`, and the
+collection time series `channel_snapshots, video_snapshots, packaging_changes` (outlier scores
+and VPH are computed on read over these — never stored).
 Simple migrations: base schema via `create_all` (v1) + `db/migrations/NNN_*.sql` deltas.
 The runner tolerates a duplicate-column error on `ADD COLUMN`, so column-adding deltas are
 no-ops on fresh databases (where `create_all` already added the column from the model).
@@ -294,6 +330,15 @@ carry only the imperative deltas.
   its channels without ever touching channel/video data; a channel orphaned from every project
   is set `active=false` in code (never deleted). A channel's `backfill_state/done/total` is
   polled like the video pipeline; the backfill runs once per channel, globally.
+
+- **Snapshot scheduler:** `primocut scheduler` runs rq-scheduler, which registers two cron jobs
+  (idempotent, cancel-by-id) of the same `snapshot_cycle(scope)` function — `scope="all"` daily,
+  `scope="recent"` every 6h — and moves due jobs onto the `primocut` queue, where the worker
+  executes them. The daily hour is offset from the 6h grid so the two never fire in the same
+  minute. Selection: `all` → every video of active channels; `recent` → the same, filtered to
+  `published_at >= now - youtube_recent_days`. One `YouTubeClient` per cycle gives a per-cycle
+  quota total (logged); channels are processed in isolation. Code: `worker/scheduler.py`,
+  `worker/snapshot_jobs.py`.
 
 - `Video.status`: `queued → downloading → transcribing → analyzing → done | error`;
   **`stopped`** when interrupted (via `stop`). `reenqueue` reuses the cache; `DELETE` removes
@@ -353,6 +398,8 @@ time. This holds in both the CLI and the web app.
 - YouTube Data API v3 client (quota accounting, resolution, thumbnails): `src/primocut/youtube/`
 - Competitor channel registration/backfill (queue + job): `src/primocut/worker/channels.py`,
   `src/primocut/worker/channel_jobs.py`
+- Snapshot collection (cycle job + scheduler): `src/primocut/worker/snapshot_jobs.py`,
+  `src/primocut/worker/scheduler.py`
 - Projects/competitors API router: `src/primocut/api/projects.py`
 
 ---
@@ -395,6 +442,9 @@ and covered by tests**.
 | **Report** | The run had degradations | A **"⚠️ Degraded run"** section right after the metadata, listing what failed/was skipped |
 | **Channel backfill** | YouTube API error (quota/auth/network) | **Degrades**: the channel is marked `backfill_state="error"` with the message logged; the job returns instead of crashing the worker (per-channel isolation) |
 | **Channel backfill** | A thumbnail cannot be fetched/hashed | Stores an empty `thumbnail_hash` and continues (a missing hash never fails the backfill) |
+| **Snapshot cycle** | A channel's API/thumbnail call fails | **Per-channel isolation**: the error is logged and the cycle moves to the next channel; it never aborts the whole cycle nor lets the exception crash the scheduler |
+| **Snapshot cycle** | A thumbnail cannot be fetched/hashed | Empty hash; no spurious packaging-change event (a change needs both old and new hashes non-empty) |
+| **Snapshot cycle** | Channel deactivated (orphaned) | Excluded from selection — collection stops until the channel is re-linked (`active=true`) |
 
 ### 4.2 Cache / resume (pay-once)
 
@@ -500,6 +550,44 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 
 The most important section. **Never overwrite or delete an entry**: a reverted decision gets a
 **new** entry pointing to the reversal. Dates in ISO (`YYYY-MM-DD`).
+
+### 2026-07-14 · Phase 2 continuous collection: scheduled snapshots + packaging detection
+**Type:** technical.
+**Decision:** add deterministic, quota-accounted collection on top of the foundation (no
+metrics/enrichment/UI yet). Key implementation decisions:
+- **Two cron registrations of one `snapshot_cycle(scope)` function.** `scope="all"` runs daily
+  (`0 3 * * *`); `scope="recent"` runs every 6h (`0 */6 * * *`, videos younger than
+  `youtube_recent_days`). The daily hour is **offset from the 6h grid** so the two never fire in
+  the same minute (no duplicate snapshot at a coincident tick). A young video gets 4×(6h) +
+  1×(daily) = 5 readings/day (better VPH resolution, the intent); an old video gets 1×/day.
+- **Snapshot tables via `create_all`** (`channel_snapshots`, `video_snapshots` with the required
+  `(video_id, captured_at)` index, `packaging_changes`), consistent with the foundation's
+  no-migration-for-new-tables decision. All rows of a cycle share one `captured_at`/`detected_at`
+  so "last snapshot" queries align.
+- **Packaging detection compares against the last-known state** stored on `competitor_videos`
+  (title string; thumbnail by **byte hash — the URL is not trusted**, so we re-download and hash
+  on **every** snapshot, both passes). A change needs both old and new values non-empty (a
+  first-seen "" hash is filled silently, no spurious event). `packaging_changes.vph_before/after`
+  are written **NULL** — the metrics step (Phase 2 step 3) fills them.
+- **Per-channel isolation with one client per cycle.** The cycle loops active channels wrapped in
+  try/except (log + continue), so one channel never aborts the cycle nor crashes the scheduler;
+  the shared client's `units_used` is the **per-cycle quota total**, logged at the end. Orphan
+  channels (`active=false`) are excluded by the selection query; re-linking resumes collection.
+- **New-video detection every cycle** from the top of the uploads playlist
+  (`youtube_uploads_scan_limit`, 1 unit/channel); new videos are added and enter the 6h cycle.
+- **Scheduler as `primocut scheduler`** (registers both crons idempotently by id, then runs the
+  rq-scheduler loop); jobs execute in `primocut worker`. `primocut competitors snapshot` runs a
+  cycle inline for manual testing. Job ids use **dashes, not colons** (RQ rejects colons).
+**Reason:** deliver the collection layer the metrics engine will read from, with correctness
+(median-friendly time series, byte-hash packaging) and resilience (per-channel isolation)
+locked in first.
+**Rejected alternatives:** thumbnail comparison by URL (unreliable — YouTube reuses URLs for
+changed images); a single merged pass with a per-video "is it due?" check (two independent crons
+are simpler and self-document the cadence); persisting per-cycle quota to a table (premature — no
+consumer yet); a separate progress table for cycles (a cycle is transient, unlike the
+once-per-channel backfill). **Test note:** the scheduler wrapper is tested against a stub
+scheduler (fakeredis incurs a ~10s connect stall per op in this environment); job-id format is
+guarded with RQ's own `validate_job_id`.
 
 ### 2026-07-14 · Phase 2 foundation: projects, global channels and the YouTube client
 **Type:** technical.
