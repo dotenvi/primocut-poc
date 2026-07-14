@@ -25,8 +25,9 @@ ends over the **same pipeline core** (no logic is rewritten between them):
 
 - **CLI** (`primocut`): commands `doctor` (environment diagnostics), `run` (end-to-end
   pipeline → Markdown report), `models` (lists OpenRouter models with tool-use support,
-  including free ones), `serve`, `worker`, and the Phase 2 sub-apps `projects`
-  (`add`/`list`/`remove`) and `competitors` (`add`/`detach`/`list`).
+  including free ones), `serve`, `worker`, `scheduler`, and the Phase 2 sub-apps `projects`
+  (`add`/`list`/`remove`), `competitors` (`add`/`detach`/`list`/`snapshot`) and `metrics`
+  (`refresh`/`show`).
 - **Local web app** (`primocut serve` + `primocut worker`): a Svelte SPA served by FastAPI,
   an RQ+Redis queue and a SQLite database. You submit a URL, follow the live status
   (polling) and open the report in the browser.
@@ -51,9 +52,26 @@ the 6h cycle) and **packaging changes** (title by string; thumbnail by **byte ha
 is not trusted — recorded in `packaging_changes`, with `vph_before/after` left NULL for the
 metrics step). Collection is per-channel isolated (a failing channel is logged and skipped, the
 cycle never aborts), orphan channels are excluded, and quota is logged per cycle.
-`primocut competitors snapshot` runs a cycle inline for manual testing. **Not yet built:**
-metrics/outlier engine (VPH, baselines, brackets — computed on read over these snapshots), AI
-enrichment and Phase 2 UI.
+`primocut competitors snapshot` runs a cycle inline for manual testing.
+
+**Metrics engine** is now in place — deterministic, no LLM, and **computed on read** over the
+snapshots (no score is ever stored). It exposes three read-only dashboards:
+`GET /api/projects/{pid}/dashboard`, `GET /api/channels/{cid}/dashboard` and
+`GET /api/channels/{cid}/videos/{vid}`. It computes: the **outlier score**
+(`views ÷ channel median baseline`, with **separate Shorts/long-form baselines** over a
+rolling *min(50 videos, 180 days)* window, **provisional** scores under 7 days, an
+**insufficient_data** guard under 10 same-format peers, and configurable **3x/6x/10x**
+brackets); **VPH strictly from snapshot deltas** (current = last-24 h delta; never
+`total_views ÷ age`); **resurgence** alerts (old video whose current VPH beats *k×* its recent
+average); **packaging impact** (mean VPH 7 days before vs after a change, filled into
+`packaging_changes.vph_before/after` once the window elapses); **engagement** (likes/comments
+per view) and **cadence** (uploads/week, weekday/hour distribution, duration per format); and
+**per-project conditional distributions** of **syntactic title attributes** (regex/heuristic,
+persisted in `video_attributes`) among outliers vs the population, gated by a
+**minimum-occurrence guard**. The two persisted artifacts (syntactic attributes + packaging
+impact) are written by the snapshot cycle and by `primocut metrics refresh`; the dashboards
+stay pure reads. **Not yet built:** AI enrichment (thumbnail/title LLM attributes, comment
+synthesis) and the Phase 2 UI.
 
 The pipeline runs, in order: **audio (yt-dlp → FFmpeg 16 kHz mono) → chat replay (optional)
 → transcription (faster-whisper `large-v3-turbo`, GPU) → analysis (LLM, macro topics)**.
@@ -251,6 +269,23 @@ primocut competitors snapshot --scope recent       # only videos < 7 days old
 primocut competitors snapshot --channel <UC...>     # a single channel
 ```
 
+**Metrics** (computed on read over the snapshots — no worker needed to *query* them). The
+scheduler already persists the two derived artifacts each cycle; run the persistence step by
+hand, or inspect a dashboard as JSON:
+
+```bash
+primocut metrics refresh                    # persist syntactic attributes + packaging impact (idempotent)
+primocut metrics show --project <PID>       # niche outlier ranking, patterns, packaging, resurgences
+primocut metrics show --channel <UC...>      # channel baselines, outliers, engagement, cadence
+primocut metrics show --channel <UC...> --video <VID>   # snapshot series + VPH + attributes
+```
+
+The same three views are exposed over HTTP: `GET /api/projects/{pid}/dashboard`,
+`GET /api/channels/{cid}/dashboard`, `GET /api/channels/{cid}/videos/{vid}`. Baseline window,
+brackets, provisional/resurgence/impact/pattern thresholds are all configurable
+(`PRIMOCUT_OUTLIER_*`, `PRIMOCUT_VPH_*`, `PRIMOCUT_RESURGENCE_*`, `PRIMOCUT_PACKAGING_IMPACT_*`,
+`PRIMOCUT_PATTERN_*` — see `.env.example`).
+
 ### 2.9 Tests
 
 ```bash
@@ -276,7 +311,13 @@ re-enqueue (cache respected)** and API endpoints. Phase 2 foundation: YouTube cl
 the projects/competitors API + CLI. Phase 2 continuous collection: **frequency selection**
 (daily vs 6h), snapshot recording, **new-video detection**, **title change**, **thumbnail
 change by byte hash under an unchanged URL**, **per-channel isolation**, orphan exclusion,
-per-cycle quota, and idempotent scheduler registration (all faked, no network).
+per-cycle quota, and idempotent scheduler registration (all faked, no network). Phase 2 metrics
+engine (synthetic fixtures, no network): **median baseline robust to a viral in the window**,
+**separate Shorts/long-form baselines**, **provisional vs definitive**, **insufficient_data**,
+**VPH from deltas** (and `None` — never fabricated — with a single snapshot), **resurgence**,
+**packaging before/after** (persisted only once the window elapses), **minimum-occurrence guard
+suppressing a small-sample pattern**, and a **channel shared by two projects yielding identical
+metrics with scoped reports**.
 
 ---
 
@@ -310,9 +351,12 @@ per-cycle quota, and idempotent scheduler registration (all faked, no network).
 ### Database (SQLite)
 
 Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations`, the Phase 2
-foundation `projects, competitor_channels, project_channels, competitor_videos`, and the
-collection time series `channel_snapshots, video_snapshots, packaging_changes` (outlier scores
-and VPH are computed on read over these — never stored).
+foundation `projects, competitor_channels, project_channels, competitor_videos`, the
+collection time series `channel_snapshots, video_snapshots, packaging_changes`, and the metrics
+artifact `video_attributes` (persisted syntactic title features, unique per `(video_id,
+source)`). Outlier scores, VPH, resurgence and pattern distributions are computed on read over
+the snapshots — never stored; the only persisted derived figures are `video_attributes` and
+`packaging_changes.vph_before/after`.
 Simple migrations: base schema via `create_all` (v1) + `db/migrations/NNN_*.sql` deltas.
 The runner tolerates a duplicate-column error on `ADD COLUMN`, so column-adding deltas are
 no-ops on fresh databases (where `create_all` already added the column from the model).
@@ -376,6 +420,14 @@ Phase 2 foundation (projects + competitor channels):
 | GET | `/api/projects/{pid}/channels` | list the project's channels + backfill state (polling) |
 | DELETE | `/api/projects/{pid}/channels/{cid}` | detach; deactivates if orphaned; **keeps data** |
 
+Phase 2 metrics dashboards (computed on read; **pure reads, no writes**):
+
+| Method | Route | Action |
+|---|---|---|
+| GET | `/api/projects/{pid}/dashboard` | niche outlier ranking, per-project attribute patterns (guarded), packaging with before/after impact, resurgences |
+| GET | `/api/channels/{cid}/dashboard` | per-format baselines, outlier ranking, engagement medians, cadence, resurgences |
+| GET | `/api/channels/{cid}/videos/{vid}` | snapshot series, VPH (current + pairwise), outlier score, engagement, resurgence, syntactic attributes, packaging changes |
+
 ### Golden rule — timestamps are never invented
 
 The LLM receives **indexed** segments (`[i] M:SS text`) and returns only
@@ -396,6 +448,10 @@ time. This holds in both the CLI and the web app.
 - Diagnostics: `src/primocut/doctor.py`
 - Cross-cutting resilience (retry/backoff/classification): `src/primocut/resilience.py`
 - YouTube Data API v3 client (quota accounting, resolution, thumbnails): `src/primocut/youtube/`
+- Metrics engine (pure core + persistence + dashboards): `src/primocut/metrics/`
+  (`core.py` = DB-free methodology; `attributes.py`/`impact.py` = the persisted artifacts;
+  `patterns.py` = per-project distributions; `service.py` = dashboard payloads). HTTP routers:
+  `api/metrics.py` (channel/video) + the project dashboard in `api/projects.py`.
 - Competitor channel registration/backfill (queue + job): `src/primocut/worker/channels.py`,
   `src/primocut/worker/channel_jobs.py`
 - Snapshot collection (cycle job + scheduler): `src/primocut/worker/snapshot_jobs.py`,
@@ -445,6 +501,8 @@ and covered by tests**.
 | **Snapshot cycle** | A channel's API/thumbnail call fails | **Per-channel isolation**: the error is logged and the cycle moves to the next channel; it never aborts the whole cycle nor lets the exception crash the scheduler |
 | **Snapshot cycle** | A thumbnail cannot be fetched/hashed | Empty hash; no spurious packaging-change event (a change needs both old and new hashes non-empty) |
 | **Snapshot cycle** | Channel deactivated (orphaned) | Excluded from selection — collection stops until the channel is re-linked (`active=true`) |
+| **Snapshot cycle** | Metrics-artifact persistence fails (attributes/impact) | Isolated in its own step: logged and skipped, **never affecting the collected snapshots** of the cycle |
+| **Metrics dashboards** | Too few videos / a single snapshot | **Degrade, not crash**: an outlier score becomes `insufficient_data`, a VPH becomes `None`, a small-sample pattern is suppressed — the dashboard still renders |
 
 ### 4.2 Cache / resume (pay-once)
 
@@ -517,6 +575,13 @@ The analysis is provider-agnostic (`SelectionLLM` interface). Automatic selectio
 | `PRIMOCUT_YOUTUBE_API_KEY` | YouTube Data API v3 key (Phase 2 competitor modeling) |
 | `PRIMOCUT_YOUTUBE_SHORT_MAX_SECONDS` | Duration threshold for the `is_short` heuristic (default 60) |
 | `PRIMOCUT_YOUTUBE_BACKFILL_LIMIT` | Uploads collected on a new channel's backfill (default 120) |
+| `PRIMOCUT_SNAPSHOT_DAILY_CRON` / `PRIMOCUT_SNAPSHOT_RECENT_CRON` | Snapshot cadences (daily / 6h) |
+| `PRIMOCUT_OUTLIER_WINDOW_VIDEOS` / `PRIMOCUT_OUTLIER_WINDOW_DAYS` | Baseline rolling window (smaller of the two) |
+| `PRIMOCUT_OUTLIER_MIN_SAMPLE` / `PRIMOCUT_OUTLIER_PROVISIONAL_DAYS` / `PRIMOCUT_OUTLIER_BRACKETS` | Insufficient-data guard, provisional cutoff, bracket tiers |
+| `PRIMOCUT_VPH_CURRENT_WINDOW_HOURS` | Trailing window for the "current" VPH (default 24) |
+| `PRIMOCUT_RESURGENCE_K` / `PRIMOCUT_RESURGENCE_MIN_AGE_DAYS` / `PRIMOCUT_RESURGENCE_BASELINE_DAYS` / `PRIMOCUT_RESURGENCE_MIN_VPH` | Resurgence detection |
+| `PRIMOCUT_PACKAGING_IMPACT_WINDOW_DAYS` | Before/after window for packaging impact (default 7) |
+| `PRIMOCUT_PATTERN_MIN_OCCURRENCE` / `PRIMOCUT_PATTERN_OUTLIER_BRACKET` | Pattern minimum-occurrence guard + outlier threshold |
 
 ---
 
@@ -550,6 +615,42 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 
 The most important section. **Never overwrite or delete an entry**: a reverted decision gets a
 **new** entry pointing to the reversal. Dates in ISO (`YYYY-MM-DD`).
+
+### 2026-07-14 · Phase 2 metrics engine: deterministic scores computed on read
+**Type:** technical (methodology — `PRIMOCUT.md` guideline 10 is non-negotiable).
+**Decision:** compute every derived score **on read** over the collected snapshots; store no
+score. Key methodology decisions:
+- **Median baselines, never the mean.** The outlier score is `latest views ÷ channel median
+  baseline`, where the baseline is the median of the same-format videos in a rolling window =
+  the smaller of *last 50 videos* and *last 180 days*. The median is robust to a viral inside
+  the window (a mean would be wrecked by it). **Separate baselines for Shorts and long-form.**
+- **Provisional + insufficient-data guards.** A video younger than 7 days is scored
+  **provisional** (it has not accumulated views against a mature baseline); a channel/format
+  with fewer than 10 videos yields **insufficient_data** instead of a misleading number.
+  Brackets 3x/6x/10x are configurable.
+- **VPH strictly from snapshot deltas.** Current VPH = the delta over the last 24 h (latest
+  snapshot vs the newest at/before `latest − 24h`). With a single snapshot VPH is `None` — it
+  is **never** fabricated from `total_views ÷ age`.
+- **Resurgence** = an old video (≥30 d) whose current VPH ≥ *k×* its recent trailing-average
+  VPH, with a minimum-absolute-VPH guard against a ~0 baseline.
+- **Per-project conditional distributions** of syntactic title attributes among definitive
+  outliers vs the population, gated by a **minimum-occurrence guard** (default 15) — below it the
+  sample is too small and the pattern is **not reported**.
+- **Two persisted artifacts only.** The methodology forbids storing scores, but the data model
+  mandates persisting the **syntactic title attributes** (`video_attributes`, content-hash gated
+  so they recompute only when the title changes and are shared across projects) and the
+  **packaging before/after impact** (`packaging_changes.vph_before/after`, filled only once the
+  7-day window elapses). Their persistence is triggered by the **snapshot cycle** and by
+  `primocut metrics refresh`; the three dashboard endpoints stay **pure reads**.
+- **Shared-channel correctness.** Per-channel/per-video metrics depend only on the channel's own
+  snapshots, so a channel in two projects yields identical figures; project dashboards merely
+  **scope** which channels/videos are ranked and which population feeds the pattern guard.
+- **Pure core.** `metrics/core.py` is DB-free (dataclasses in/out) so the methodology is
+  unit-tested directly on synthetic fixtures (median-robust-to-a-viral, format separation,
+  provisional/insufficient, VPH-from-deltas, resurgence, packaging before/after).
+**Reason:** guideline 10 makes methodological correctness the whole point of this layer;
+computing on read keeps the snapshots the single source of truth and lets thresholds change
+without recollecting or rescoring history.
 
 ### 2026-07-14 · Phase 2 continuous collection: scheduled snapshots + packaging detection
 **Type:** technical.
