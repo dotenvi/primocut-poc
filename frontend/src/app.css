@@ -242,12 +242,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .dot.st-skipped { background: transparent; border: 2px dashed var(--muted); }
 
 .pipe-details { margin-top: 16px; }
-.pipe-details summary {
-  cursor: pointer; color: var(--muted);
-  font-family: var(--f-label); letter-spacing: 0.04em; font-size: 0.95em;
-}
-.pipe-details summary:hover { color: var(--fg); }
-.pipe-details ul { list-style: none; padding: 0; margin: 12px 0 0; }
+.pipe-details ul { list-style: none; padding: 0; margin: 0; }
 .pipe-details li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
 .pipe-details .li-right { display: flex; align-items: center; gap: 10px; }
 .stage-dur { color: var(--muted); font-family: var(--f-mono); font-size: 0.8em; font-variant-numeric: tabular-nums; }
@@ -269,6 +264,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 .head-actions { display: flex; align-items: center; gap: 8px; }
+.head-left { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; min-width: 0; }
 .processing { color: var(--cue); }
 .degraded, .player-blocked {
   background: var(--cue-dim); border: 1px solid var(--cue);

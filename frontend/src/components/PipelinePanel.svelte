@@ -22,7 +22,15 @@
 
 <article class="pipeline card">
   <div class="card-head">
-    <h3>Pipeline stages</h3>
+    <div class="head-left">
+      <h3>Pipeline stages</h3>
+      <div class="dots">
+        {#each steps as s, i (s.key)}
+          <span class="dot st-{s.state}" title={s.label}></span>
+          {#if i < steps.length - 1}<span class="dot-link"></span>{/if}
+        {/each}
+      </div>
+    </div>
     {#if active}
       <button class="mini danger" on:click={() => dispatch('stop')}>Stop</button>
     {:else}
@@ -39,15 +47,7 @@
     </div>
   {/if}
 
-  <div class="dots">
-    {#each steps as s, i (s.key)}
-      <span class="dot st-{s.state}" title={s.label}></span>
-      {#if i < steps.length - 1}<span class="dot-link"></span>{/if}
-    {/each}
-  </div>
-
-  <details class="pipe-details">
-    <summary>Show details</summary>
+  <div class="pipe-details">
     <ul>
       {#each steps as s (s.key)}
         <li>
@@ -64,5 +64,5 @@
         </li>
       {/each}
     </ul>
-  </details>
+  </div>
 </article>
