@@ -22,6 +22,7 @@ from .models import (
     PackagingChangeRow,
     ProjectChannelRow,
     ProjectRow,
+    VideoAttributesRow,
     VideoSnapshotRow,
 )
 
@@ -347,3 +348,159 @@ def update_video_packaging(
         row.thumbnail_url = thumbnail_url
     if thumbnail_hash is not None:
         row.thumbnail_hash = thumbnail_hash
+
+
+# ------------------------- Metrics reads (computed on read) -------------------------
+
+
+def get_video(s: Session, video_id: str) -> CompetitorVideoRow | None:
+    return s.get(CompetitorVideoRow, video_id)
+
+
+def list_video_snapshots(s: Session, video_id: str) -> list[VideoSnapshotRow]:
+    """A video's snapshots ordered by capture time (ascending) — the raw series
+    from which VPH and outlier scores are derived on read."""
+    return list(
+        s.execute(
+            select(VideoSnapshotRow)
+            .where(VideoSnapshotRow.video_id == video_id)
+            .order_by(VideoSnapshotRow.captured_at)
+        ).scalars()
+    )
+
+
+def latest_channel_snapshot(s: Session, channel_id: str) -> ChannelSnapshotRow | None:
+    return s.execute(
+        select(ChannelSnapshotRow)
+        .where(ChannelSnapshotRow.channel_id == channel_id)
+        .order_by(ChannelSnapshotRow.captured_at.desc())
+    ).scalars().first()
+
+
+def latest_views(s: Session, video_ids: list[str]) -> dict[str, int]:
+    """Map each video id to the views of its most recent snapshot (videos with no
+    snapshot are absent from the result)."""
+    if not video_ids:
+        return {}
+    latest = (
+        select(
+            VideoSnapshotRow.video_id.label("vid"),
+            func.max(VideoSnapshotRow.captured_at).label("mx"),
+        )
+        .where(VideoSnapshotRow.video_id.in_(video_ids))
+        .group_by(VideoSnapshotRow.video_id)
+        .subquery()
+    )
+    rows = s.execute(
+        select(VideoSnapshotRow.video_id, VideoSnapshotRow.views).join(
+            latest,
+            (VideoSnapshotRow.video_id == latest.c.vid)
+            & (VideoSnapshotRow.captured_at == latest.c.mx),
+        )
+    ).all()
+    return {vid: views for vid, views in rows}
+
+
+def latest_video_snapshot(s: Session, video_id: str) -> VideoSnapshotRow | None:
+    return s.execute(
+        select(VideoSnapshotRow)
+        .where(VideoSnapshotRow.video_id == video_id)
+        .order_by(VideoSnapshotRow.captured_at.desc())
+    ).scalars().first()
+
+
+def list_packaging_changes(
+    s: Session, *, video_id: str | None = None, channel_id: str | None = None
+) -> list[PackagingChangeRow]:
+    """Packaging-change events, by video or by channel (newest first)."""
+    stmt = select(PackagingChangeRow)
+    if video_id is not None:
+        stmt = stmt.where(PackagingChangeRow.video_id == video_id)
+    if channel_id is not None:
+        stmt = stmt.join(
+            CompetitorVideoRow,
+            CompetitorVideoRow.video_id == PackagingChangeRow.video_id,
+        ).where(CompetitorVideoRow.channel_id == channel_id)
+    return list(s.execute(stmt.order_by(PackagingChangeRow.detected_at.desc())).scalars())
+
+
+def list_pending_packaging_changes(s: Session) -> list[PackagingChangeRow]:
+    """Events still missing their impact figures (vph_after not yet filled)."""
+    return list(
+        s.execute(
+            select(PackagingChangeRow).where(PackagingChangeRow.vph_after.is_(None))
+        ).scalars()
+    )
+
+
+def set_packaging_impact(
+    s: Session,
+    change_id: int,
+    *,
+    vph_before: float | None,
+    vph_after: float | None,
+) -> None:
+    row = s.get(PackagingChangeRow, change_id)
+    if row is not None:
+        row.vph_before = vph_before
+        row.vph_after = vph_after
+
+
+def list_project_videos(s: Session, project_id: int) -> list[CompetitorVideoRow]:
+    """Every video of every channel linked to a project (deduplicated by video)."""
+    return list(
+        s.execute(
+            select(CompetitorVideoRow)
+            .join(
+                ProjectChannelRow,
+                ProjectChannelRow.channel_id == CompetitorVideoRow.channel_id,
+            )
+            .where(ProjectChannelRow.project_id == project_id)
+            .order_by(CompetitorVideoRow.published_at.desc())
+        ).scalars()
+    )
+
+
+# ------------------------- Video attributes (persisted) -------------------------
+
+
+def get_video_attributes(
+    s: Session, video_id: str, source: str
+) -> VideoAttributesRow | None:
+    return s.execute(
+        select(VideoAttributesRow)
+        .where(VideoAttributesRow.video_id == video_id)
+        .where(VideoAttributesRow.source == source)
+    ).scalars().first()
+
+
+def upsert_video_attributes(
+    s: Session,
+    *,
+    video_id: str,
+    source: str,
+    attributes: dict,
+    content_hash: str,
+) -> VideoAttributesRow:
+    row = get_video_attributes(s, video_id, source)
+    if row is None:
+        row = VideoAttributesRow(video_id=video_id, source=source)
+        s.add(row)
+    row.attributes = attributes
+    row.content_hash = content_hash
+    s.flush()
+    return row
+
+
+def list_video_attributes(
+    s: Session, video_ids: list[str], source: str
+) -> dict[str, VideoAttributesRow]:
+    """Attribute rows for a set of videos, keyed by video id."""
+    if not video_ids:
+        return {}
+    rows = s.execute(
+        select(VideoAttributesRow)
+        .where(VideoAttributesRow.source == source)
+        .where(VideoAttributesRow.video_id.in_(video_ids))
+    ).scalars()
+    return {r.video_id: r for r in rows}

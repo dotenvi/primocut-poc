@@ -245,3 +245,28 @@ class PackagingChangeRow(Base):
     detected_at: Mapped[datetime] = mapped_column(default=_now)
     vph_before: Mapped[float | None] = mapped_column(Float, default=None)
     vph_after: Mapped[float | None] = mapped_column(Float, default=None)
+
+
+class VideoAttributesRow(Base):
+    """Structured attributes derived from a video's packaging, keyed by source.
+
+    `source="syntactic"` holds the deterministic title features (regex/heuristic,
+    no LLM); `title_llm`/`thumbnail_llm` are reserved for the opt-in enrichment
+    phase. `content_hash` is the hash of the analysed content (the title for the
+    syntactic source) so a row is recomputed only when the content changes and can
+    be shared across projects. Scores are never stored here — only raw attributes.
+    """
+
+    __tablename__ = "video_attributes"
+    __table_args__ = (
+        Index("ix_video_attributes_video_source", "video_id", "source", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[str] = mapped_column(
+        ForeignKey("competitor_videos.video_id", ondelete="CASCADE")
+    )
+    source: Mapped[str] = mapped_column(String)  # "syntactic" | "title_llm" | "thumbnail_llm"
+    attributes: Mapped[dict] = mapped_column(JSON, default=dict)
+    content_hash: Mapped[str] = mapped_column(String, default="")
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)

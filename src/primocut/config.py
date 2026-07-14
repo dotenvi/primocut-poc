@@ -107,6 +107,41 @@ class Settings(BaseSettings):
     snapshot_daily_cron: str = "0 3 * * *"
     snapshot_recent_cron: str = "0 */6 * * *"
 
+    # --- Phase 2: metrics engine (deterministic, computed on read) ---
+    # Outlier score = latest views / channel baseline. The baseline is the MEDIAN
+    # (never the mean) of the same-format videos in a rolling window = the smaller
+    # of "the last N videos" and "the last D days"; separate baselines for Shorts
+    # and long-form. A video needs at least `outlier_min_sample` same-format peers
+    # to be scored, else its status is "insufficient_data".
+    outlier_window_videos: int = 50
+    outlier_window_days: int = 180
+    outlier_min_sample: int = 10
+    # A video younger than this is scored "provisional" (it has not accumulated
+    # views against a mature baseline yet).
+    outlier_provisional_days: int = 7
+    # Bracket thresholds (comma-separated, ascending) labelling the score tier.
+    outlier_brackets: str = "3,6,10"
+    # Views-per-hour is derived exclusively from snapshot deltas. The "current"
+    # VPH is the delta over this trailing window (hours).
+    vph_current_window_hours: int = 24
+    # Resurgence: an old video (age >= min_age_days) whose current VPH is at least
+    # `resurgence_k` times its recent trailing-average VPH (mean of the pairwise
+    # deltas over the last `resurgence_baseline_days`). `min_vph` guards against a
+    # ~0 baseline producing a spurious ratio.
+    resurgence_min_age_days: int = 30
+    resurgence_k: float = 3.0
+    resurgence_baseline_days: int = 7
+    resurgence_min_vph: float = 1.0
+    # Packaging impact: mean VPH this many days before vs after a change (the
+    # "after" side is computed only once the window has fully elapsed).
+    packaging_impact_window_days: int = 7
+    # Conditional-distribution guard: a title/thumbnail pattern is reported for a
+    # project only if at least this many outlier videos exhibit it.
+    pattern_min_occurrence: int = 15
+    # The bracket (multiplier) at/above which a video counts as an outlier for the
+    # per-project pattern distributions.
+    pattern_outlier_bracket: float = 3.0
+
 
 def get_settings() -> Settings:
     """Instantiate the settings reading environment/.env at call time."""
