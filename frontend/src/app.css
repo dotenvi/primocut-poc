@@ -245,9 +245,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .pipeline h3 { margin: 0 0 12px; font-size: 1.05rem; }
 .pbar { height: 8px; background: var(--inset); border-radius: 999px; overflow: hidden; margin-bottom: 16px; }
 .pbar .pfill { height: 100%; background: var(--cue); transition: width 0.4s ease; }
-.dots { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.dots { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
 .dot { width: 15px; height: 15px; border-radius: 50%; background: var(--neutral-dim); }
-.dot-link { width: 12px; height: 2px; border-radius: 2px; background: var(--border); }
+.dot-link { width: 36px; height: 2px; border-radius: 2px; background: var(--border); }
 .dot.st-done { background: var(--ready); }
 .dot.st-running { background: var(--cue); animation: pulse 1.2s infinite; }
 .dot.st-failed { background: var(--tally); }
@@ -255,6 +255,16 @@ button:disabled { opacity: 0.5; cursor: default; }
 .dot.st-empty { background: var(--muted); }
 .dot.st-skipped { background: transparent; border: 2px dashed var(--muted); }
 
+.pipe-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-top: 12px; padding: 0;
+  background: none; border: none; cursor: pointer;
+  font-size: 0.85rem; font-weight: 500; letter-spacing: 0.01em;
+  color: var(--muted); transition: color 0.15s ease;
+}
+.pipe-toggle:hover { color: var(--fg); }
+.pipe-toggle .chev { transition: transform 0.2s ease; }
+.pipe-toggle.open .chev { transform: rotate(180deg); }
 .pipe-details { margin-top: 16px; }
 .pipe-details ul { list-style: none; padding: 0; margin: 0; }
 .pipe-details li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
