@@ -84,6 +84,14 @@ def snapshot_cycle(
             logger.error("snapshot(%s): channel %s failed: %s", scope, cid, exc)
             continue
 
+    # Persistence step (mandated by the data model): refresh the syntactic title
+    # attributes for the processed channels and fill packaging impact for events
+    # whose window has elapsed. Content-hash gated + idempotent; isolated so a
+    # failure here never affects the collected snapshots.
+    _persist_metrics_artifacts(
+        [cid for cid, _ in targets], settings=settings, database=database, now=now
+    )
+
     logger.info(
         "snapshot(%s) done: %d channel(s), %d video(s), %d packaging change(s), "
         "%d quota unit(s)",
@@ -100,6 +108,27 @@ def snapshot_cycle(
         "packaging_changes": packaging_changes,
         "quota_units": client.units_used,
     }
+
+
+def _persist_metrics_artifacts(channel_ids, *, settings, database, now) -> None:
+    """Refresh syntactic title attributes + backfill packaging impact for the
+    processed channels. Deterministic, no network; isolated from the collection."""
+    from ..db import competitors as crepo
+    from ..metrics.attributes import refresh_syntactic_attributes
+    from ..metrics.impact import backfill_packaging_impact
+
+    try:
+        with database.session() as s:
+            video_ids: list[str] = []
+            for cid in channel_ids:
+                video_ids.extend(crepo.list_channel_video_ids(s, cid))
+            attrs = refresh_syntactic_attributes(s, video_ids)
+            filled = backfill_packaging_impact(s, now=now, settings=settings)
+        logger.info(
+            "metrics artifacts: %d attribute row(s), %d packaging impact(s)", attrs, filled
+        )
+    except Exception as exc:  # never let persistence break the collection cycle
+        logger.error("metrics artifact persistence failed: %s", exc)
 
 
 def _snapshot_channel(

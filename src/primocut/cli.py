@@ -17,8 +17,10 @@ projects_app = typer.Typer(help="Manage competitor projects", no_args_is_help=Tr
 competitors_app = typer.Typer(
     help="Manage competitor channels within a project", no_args_is_help=True
 )
+metrics_app = typer.Typer(help="Competitor metrics (computed on read)", no_args_is_help=True)
 app.add_typer(projects_app, name="projects")
 app.add_typer(competitors_app, name="competitors")
+app.add_typer(metrics_app, name="metrics")
 
 
 @app.command()
@@ -383,6 +385,64 @@ def competitors_snapshot(
         f"{result['packaging_changes']} packaging change(s), "
         f"{result['quota_units']} quota unit(s)."
     )
+
+
+@metrics_app.command("refresh")
+def metrics_refresh() -> None:
+    """Persist the derived artifacts (syntactic title attributes + packaging
+    impact) without running the scheduler. Idempotent."""
+    setup_logging()
+    from .db import competitors as crepo
+    from .db import get_database
+    from .metrics.attributes import refresh_syntactic_attributes
+    from .metrics.impact import backfill_packaging_impact
+
+    settings = get_settings()
+    database = get_database(settings)
+    with database.session() as s:
+        video_ids = [
+            v.video_id
+            for c in crepo.list_active_channels(s)
+            for v in crepo.list_channel_videos(s, c.channel_id)
+        ]
+        attrs = refresh_syntactic_attributes(s, video_ids)
+        filled = backfill_packaging_impact(s, settings=settings)
+    console.print(
+        f"[green]Metrics refreshed:[/green] {attrs} attribute row(s), "
+        f"{filled} packaging impact(s) filled."
+    )
+
+
+@metrics_app.command("show")
+def metrics_show(
+    project: int | None = typer.Option(None, "--project", "-p", help="Project ID"),
+    channel: str | None = typer.Option(None, "--channel", "-c", help="Channel ID"),
+    video: str | None = typer.Option(None, "--video", "-v", help="Video ID (with --channel)"),
+) -> None:
+    """Print a dashboard payload (project, channel, or channel+video) as JSON."""
+    setup_logging()
+    import json
+
+    from .db import get_database
+    from .metrics import service
+
+    settings = get_settings()
+    database = get_database(settings)
+    with database.session() as s:
+        if project is not None:
+            data = service.project_dashboard(s, project, settings=settings)
+        elif channel is not None and video is not None:
+            data = service.video_report(s, channel, video, settings=settings)
+        elif channel is not None:
+            data = service.channel_dashboard(s, channel, settings=settings)
+        else:
+            console.print("[red]Pass --project, --channel, or --channel + --video.[/red]")
+            raise typer.Exit(code=2)
+
+    if data is None:
+        console.print("[red]Not found.[/red]")
+        raise typer.Exit(code=1)
+    console.print_json(json.dumps(data, default=str))
 
 
 if __name__ == "__main__":

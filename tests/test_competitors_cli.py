@@ -97,3 +97,20 @@ def test_competitors_snapshot_wires_cycle(temp_db, monkeypatch):
 def test_competitors_snapshot_rejects_bad_scope(temp_db):
     r = runner.invoke(app, ["competitors", "snapshot", "--scope", "weekly"])
     assert r.exit_code == 2
+
+
+def test_metrics_refresh_runs_on_empty_db(temp_db):
+    r = runner.invoke(app, ["metrics", "refresh"])
+    assert r.exit_code == 0, r.output
+    assert "Metrics refreshed" in r.output
+
+
+def test_metrics_show_requires_a_target(temp_db):
+    r = runner.invoke(app, ["metrics", "show"])
+    assert r.exit_code == 2
+
+
+def test_metrics_show_not_found(temp_db):
+    r = runner.invoke(app, ["metrics", "show", "--project", "999"])
+    assert r.exit_code == 1
+    assert "Not found" in r.output
