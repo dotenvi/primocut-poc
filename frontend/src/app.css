@@ -273,6 +273,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 /* Step badges — pill wells, label type, color reads as the state. */
 .badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 104px; box-sizing: border-box;
   font-family: var(--f-label); font-size: 0.74em; font-weight: 600;
   letter-spacing: 0.07em; text-transform: uppercase;
   padding: 3px 10px; border-radius: 999px;

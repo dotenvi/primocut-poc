@@ -3,6 +3,8 @@
   import { api, isActive } from '../lib/api.js'
   import { currentStep } from '../lib/steps.js'
 
+  const STATUS_LABEL = { done: 'completed' }
+
   let videos = []
   let error = ''
   let timer
@@ -37,7 +39,7 @@
             <a href={`#/report/${v.id}`}>{v.title || v.id}</a>
             <div class="muted">{v.channel}</div>
           </div>
-          <span class="status status-{v.status}">{v.status}</span>
+          <span class="status status-{v.status}">{STATUS_LABEL[v.status] || v.status}</span>
         </div>
         {#if isActive(v.status)}
           {@const step = currentStep(v.stage)}

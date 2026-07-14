@@ -15,7 +15,7 @@
   let showDetails = false
 
   const badgeText = {
-    done: 'Done', running: 'Processing', failed: 'Failed',
+    done: 'Finished', running: 'Processing', failed: 'Failed',
     pending: 'Pending', empty: 'No data', skipped: 'Skipped',
   }
 
