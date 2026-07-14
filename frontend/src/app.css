@@ -192,7 +192,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .mini {
   padding: 5px 11px; font-size: 0.82em; font-weight: 500;
-  background: transparent; color: var(--muted); border: 1px solid var(--border);
+  background: transparent; color: var(--muted); border: 1px solid var(--muted);
 }
 .mini:hover { color: var(--fg); border-color: var(--fg); }
 .mini:disabled { opacity: 0.55; cursor: default; }
@@ -247,7 +247,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 .pbar .pfill { height: 100%; background: var(--cue); transition: width 0.4s ease; }
 .dots { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
 .dot { width: 15px; height: 15px; border-radius: 50%; background: var(--neutral-dim); }
-.dot-link { width: 36px; height: 2px; border-radius: 2px; background: var(--border); }
+.dot-link { width: 24px; height: 2px; border-radius: 2px; background: var(--border); }
 .dot.st-done { background: var(--ready); }
 .dot.st-running { background: var(--cue); animation: pulse 1.2s infinite; }
 .dot.st-failed { background: var(--tally); }

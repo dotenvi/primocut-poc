@@ -31,7 +31,7 @@
       <button class="mini danger" on:click={() => dispatch('stop')}>Stop</button>
     {:else}
       <div class="head-actions">
-        <button class="mini" on:click={() => dispatch('reprocess')}>Reprocess</button>
+        <button class="mini" on:click={() => dispatch('reprocess')}>Rerun stages</button>
         <button class="mini danger" on:click={() => dispatch('remove')}>Delete video</button>
       </div>
     {/if}
