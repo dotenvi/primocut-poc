@@ -27,11 +27,12 @@
   --f-body: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 * { box-sizing: border-box; }
+html { font-size: 17px; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 15px/1.6 var(--f-body);
+  font: 1rem/1.65 var(--f-body);
   -webkit-font-smoothing: antialiased;
 }
 a { color: var(--fg); text-decoration: none; }
@@ -42,22 +43,30 @@ a:hover { color: var(--tally); text-decoration: underline; text-underline-offset
 /* Visible keyboard focus everywhere, no glow. */
 :focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; border-radius: 3px; }
 
-.topbar {
-  display: flex; align-items: center; gap: 24px;
-  padding: 14px 22px; border-bottom: 1px solid var(--border); background: var(--panel);
+#app { display: flex; min-height: 100vh; }
+.sidebar {
+  flex: 0 0 220px; align-self: flex-start;
+  position: sticky; top: 0; height: 100vh;
+  display: flex; flex-direction: column; gap: 28px;
+  padding: 22px 18px;
+  border-right: 1px solid var(--border); background: var(--panel);
 }
 .brand {
   font-family: var(--f-label); font-weight: 700; font-size: 1.25rem;
   letter-spacing: 0.14em; color: var(--fg);
 }
 .brand:hover { color: var(--fg); text-decoration: none; }
-.topbar nav a {
-  margin-right: 16px; color: var(--muted);
-  font-family: var(--f-label); font-weight: 500; letter-spacing: 0.04em;
+.sidebar nav { display: flex; flex-direction: column; gap: 4px; }
+.sidebar nav a {
+  display: flex; align-items: center; gap: 11px;
+  color: var(--muted); padding: 9px 12px; border-radius: var(--r-input);
+  font-family: var(--f-label); font-weight: 500; font-size: 1.15rem; letter-spacing: 0.04em;
 }
-.topbar nav a:hover { color: var(--fg); text-decoration: none; }
+.sidebar nav a svg { width: 20px; height: 20px; flex: none; }
+.sidebar nav a:hover { color: var(--fg); background: var(--inset); text-decoration: none; }
+.sidebar nav a.active { color: var(--fg); background: var(--neutral-dim); }
 
-main { max-width: 900px; margin: 0 auto; padding: 28px 20px 88px; }
+main { flex: 1 1 auto; min-width: 0; max-width: 900px; margin: 0 auto; padding: 28px 20px 88px; }
 section { margin: 28px 0; }
 
 /* Report — "watch" layout: sticky player on the left, tabs on the right.
@@ -82,13 +91,9 @@ main.report { max-width: 1720px; }
    normal page scroll) and to wide screens (mobile collapses to one column). */
 @media (min-width: 901px) {
   body:has(.report-layout.split) { overflow: hidden; }
-  /* The app mounts into #app, so #app (not body) is the flex column that
-     holds the topbar + the viewport-filling main. */
-  body:has(.report-layout.split) #app {
-    height: 100vh; overflow: hidden;
-    display: flex; flex-direction: column;
-  }
-  body:has(.report-layout.split) .topbar { flex: 0 0 auto; }
+  /* The app mounts into #app, a flex row (sidebar + main). Pin it to the
+     viewport so the sidebar and the viewport-filling main never scroll off. */
+  body:has(.report-layout.split) #app { height: 100vh; overflow: hidden; }
   body:has(.report-layout.split) main.report {
     flex: 1 1 auto; min-height: 0; overflow: hidden;
     /* width:100% stops the flex item from shrinking to its content width
@@ -143,6 +148,15 @@ main.report { max-width: 1720px; }
   main.report { max-width: 900px; }
   .report-layout.split { display: block; }
   .report-side .tabs-card { margin: 24px 0; }
+  /* Sidebar collapses back to a horizontal top bar on narrow screens. */
+  #app { display: block; }
+  .sidebar {
+    position: static; height: auto; flex: none; align-self: auto;
+    flex-direction: row; align-items: center; gap: 24px;
+    padding: 14px 22px;
+    border-right: none; border-bottom: 1px solid var(--border);
+  }
+  .sidebar nav { flex-direction: row; gap: 16px; }
 }
 h1, h2, h3 { font-family: var(--f-label); font-weight: 600; letter-spacing: 0.01em; }
 h1 { font-size: 1.8rem; margin: 0 0 4px; }
