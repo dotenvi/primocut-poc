@@ -75,3 +75,25 @@ def test_competitors_detach_wires_detach(monkeypatch):
     assert r.exit_code == 0, r.output
     assert "Detached" in r.output
     assert "deactivated" in r.output.lower()
+
+
+def test_competitors_snapshot_wires_cycle(temp_db, monkeypatch):
+    calls = {}
+
+    def fake_cycle(scope, *, channel_id=None, **kwargs):
+        calls["scope"] = scope
+        calls["channel_id"] = channel_id
+        return {"scope": scope, "channels": 2, "videos": 5,
+                "packaging_changes": 1, "quota_units": 9}
+
+    monkeypatch.setattr("primocut.worker.snapshot_jobs.snapshot_cycle", fake_cycle)
+    r = runner.invoke(app, ["competitors", "snapshot", "--scope", "recent", "-c", "UCabc"])
+    assert r.exit_code == 0, r.output
+    assert calls == {"scope": "recent", "channel_id": "UCabc"}
+    assert "Snapshot (recent) done" in r.output
+    assert "9 quota" in r.output  # rich may wrap "quota unit(s)" across lines
+
+
+def test_competitors_snapshot_rejects_bad_scope(temp_db):
+    r = runner.invoke(app, ["competitors", "snapshot", "--scope", "weekly"])
+    assert r.exit_code == 2

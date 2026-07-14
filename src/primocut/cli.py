@@ -181,6 +181,22 @@ def worker() -> None:
     Worker([Queue(settings.rq_queue, connection=conn)], connection=conn).work()
 
 
+@app.command()
+def scheduler() -> None:
+    """Start the snapshot scheduler (daily + 6h competitor collection cycles)."""
+    setup_logging()
+    from .db import get_database
+    from .worker.scheduler import run_scheduler
+
+    settings = get_settings()
+    get_database(settings)  # ensure schema/migrations
+    console.print(
+        f"[green]Scheduler[/green] running (daily='{settings.snapshot_daily_cron}', "
+        f"6h='{settings.snapshot_recent_cron}') at {settings.redis_url}"
+    )
+    run_scheduler(settings)
+
+
 @projects_app.command("add")
 def projects_add(
     name: str = typer.Argument(..., help="Project name (unique)"),
@@ -330,6 +346,43 @@ def competitors_list(
             state = f"{c.backfill_state} ({c.backfill_done}/{c.backfill_total})"
             table.add_row(c.channel_id, c.title, state, "✅" if c.active else "—")
     console.print(table)
+
+
+@competitors_app.command("snapshot")
+def competitors_snapshot(
+    channel: str | None = typer.Option(
+        None, "--channel", "-c", help="Limit to a single channel ID (default: all active)"
+    ),
+    scope: str = typer.Option(
+        "all", "--scope", help="Which videos to snapshot: all | recent (< 7 days)"
+    ),
+) -> None:
+    """Run one snapshot cycle inline (manual/testing; no worker/scheduler needed)."""
+    setup_logging()
+    from .db import get_database
+    from .worker.snapshot_jobs import VALID_SCOPES, snapshot_cycle
+    from .youtube.client import YouTubeError
+
+    if scope not in VALID_SCOPES:
+        console.print(f"[red]Invalid --scope[/red] (use one of {VALID_SCOPES}).")
+        raise typer.Exit(code=2)
+
+    settings = get_settings()
+    database = get_database(settings)
+    try:
+        result = snapshot_cycle(
+            scope, channel_id=channel, settings=settings, database=database
+        )
+    except YouTubeError as exc:
+        console.print(f"[red]Snapshot failed:[/red] {exc}")
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"[green]Snapshot ({result['scope']}) done:[/green] "
+        f"{result['channels']} channel(s), {result['videos']} video(s), "
+        f"{result['packaging_changes']} packaging change(s), "
+        f"{result['quota_units']} quota unit(s)."
+    )
 
 
 if __name__ == "__main__":
