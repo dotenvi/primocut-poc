@@ -25,10 +25,23 @@ ends over the **same pipeline core** (no logic is rewritten between them):
 
 - **CLI** (`primocut`): commands `doctor` (environment diagnostics), `run` (end-to-end
   pipeline → Markdown report), `models` (lists OpenRouter models with tool-use support,
-  including free ones), `serve` and `worker`.
+  including free ones), `serve`, `worker`, and the Phase 2 sub-apps `projects`
+  (`add`/`list`/`remove`) and `competitors` (`add`/`detach`/`list`).
 - **Local web app** (`primocut serve` + `primocut worker`): a Svelte SPA served by FastAPI,
   an RQ+Redis queue and a SQLite database. You submit a URL, follow the live status
   (polling) and open the report in the browser.
+
+**Phase 2 foundation (competitor channel modeling — in progress).** The data foundation is
+in place: **projects** group **global competitor channels** (M:N, deduplicated by
+`channel_id`); registering a channel resolves its URL/@handle/ID via the **YouTube Data API
+v3** and, when the channel is new to the system, enqueues an async **backfill** of its last
+120 uploads (metadata + `is_short` + initial `thumbnail_hash`) into `competitor_videos`;
+re-registering a known channel only links it (no re-collection). Detaching a channel — or
+deleting a project — always preserves channel/video data and deactivates a channel that has
+become orphaned from every project. The YouTube client accounts quota per operation
+(`videos.list` batches up to 50 IDs = 1 unit) and `doctor` validates the key with a real,
+cheap call. **Not yet built:** scheduled snapshots, metrics/outlier engine, AI enrichment
+and Phase 2 UI.
 
 The pipeline runs, in order: **audio (yt-dlp → FFmpeg 16 kHz mono) → chat replay (optional)
 → transcription (faster-whisper `large-v3-turbo`, GPU) → analysis (LLM, macro topics)**.
@@ -110,8 +123,10 @@ primocut doctor
 ```
 
 Validates **GPU/CUDA (WSL2), FFmpeg, yt-dlp, the selected provider's key, the provider SDK,
-Redis and the database**, and prints the fix command for each pending item. Exits with code
-`1` while there are pending items.
+the YouTube Data API key (a real 1-unit call), Redis and the database**, and prints the fix
+command for each pending item. Exits with code `1` while there are pending items. The YouTube
+check fails when `PRIMOCUT_YOUTUBE_API_KEY` is unset (it is a Phase 2 requirement, like the
+LLM provider key).
 
 ### 2.4 CLI: `run` and `models`
 
@@ -183,7 +198,29 @@ permanent artifacts (database in the web app, `--output` JSON caches in the CLI)
 cd frontend && npm run dev     # Vite on :5173, proxy /api → :8000 (run `primocut serve` alongside)
 ```
 
-### 2.8 Tests
+### 2.8 Competitor projects (Phase 2 foundation)
+
+Needs `PRIMOCUT_YOUTUBE_API_KEY` (YouTube Data API v3; free tier 10,000 units/day). A backfill
+runs asynchronously on the existing queue, so `primocut worker` must be running (and Redis up)
+for a new channel's uploads to be collected.
+
+```bash
+# Projects (one per niche/clip channel you run)
+primocut projects add "Cortes BR" -d "my niche"
+primocut projects list
+primocut projects remove <PROJECT_ID>          # detaches channels; never deletes channel data
+
+# Competitor channels within a project (URL, @handle or channel ID)
+primocut competitors add "https://www.youtube.com/@SomeChannel" --project <PROJECT_ID>
+primocut competitors list --project <PROJECT_ID>     # shows backfill state (done/total)
+primocut competitors detach <CHANNEL_ID> --project <PROJECT_ID>
+```
+
+A channel that is new to the system triggers a backfill of its last 120 uploads; a channel
+already known is only linked (global dedup, no re-collection). Detaching a channel that ends
+up orphaned from every project deactivates it (`active=false`) but keeps all its data.
+
+### 2.9 Tests
 
 ```bash
 source .venv/bin/activate
@@ -202,7 +239,10 @@ pytest tests/test_pipeline.py -v              # end-to-end with fakes
 ```
 
 The suite also covers (Phase 1): migrations/DAO, job state transitions, **idempotent
-re-enqueue (cache respected)** and API endpoints.
+re-enqueue (cache respected)** and API endpoints. Phase 2 foundation: YouTube client with
+**quota accounting** (fully faked, no network), channel resolution, backfill of 120,
+**cross-project dedup**, detach/delete **data preservation**, **orphan deactivation**, and
+the projects/competitors API + CLI.
 
 ---
 
@@ -235,10 +275,25 @@ re-enqueue (cache respected)** and API endpoints.
 
 ### Database (SQLite)
 
-Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations`.
+Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations` and the Phase 2
+foundation `projects, competitor_channels, project_channels, competitor_videos`.
 Simple migrations: base schema via `create_all` (v1) + `db/migrations/NNN_*.sql` deltas.
 The runner tolerates a duplicate-column error on `ADD COLUMN`, so column-adding deltas are
 no-ops on fresh databases (where `create_all` already added the column from the model).
+
+**New tables are created by `create_all`, not by a migration.** `create_all` issues
+`CREATE TABLE` only for tables that do not yet exist — on both a fresh and an existing
+database — so it is the single mechanism for adding a whole table (exactly how the v1 base was
+made). `NNN_*.sql` migrations are reserved for `ALTER`/`DROP` on existing tables, which
+`create_all` cannot perform. The ORM is the single source of truth for table shape; migrations
+carry only the imperative deltas.
+
+- **Multi-project semantics:** `competitor_channels` is global (deduplicated by `channel_id`),
+  `competitor_videos` is deduplicated by `video_id`, and `project_channels` is the M:N link.
+  The `ondelete=CASCADE` lives **only** on `project_channels`, so deleting a project detaches
+  its channels without ever touching channel/video data; a channel orphaned from every project
+  is set `active=false` in code (never deleted). A channel's `backfill_state/done/total` is
+  polled like the video pipeline; the backfill runs once per channel, globally.
 
 - `Video.status`: `queued → downloading → transcribing → analyzing → done | error`;
   **`stopped`** when interrupted (via `stop`). `reenqueue` reuses the cache; `DELETE` removes
@@ -263,6 +318,19 @@ no-ops on fresh databases (where `create_all` already added the column from the 
 | POST | `/api/videos/{id}/stop` | interrupts processing (cancels the job/worker; status→stopped) |
 | DELETE | `/api/videos/{id}` | deletes EVERYTHING about the video (database + files); refuses (409) if active — stop it first |
 
+Phase 2 foundation (projects + competitor channels):
+
+| Method | Route | Action |
+|---|---|---|
+| POST | `/api/projects` `{name, description?}` | create project (409 on duplicate name) |
+| GET | `/api/projects` | list projects (+ channel counts) |
+| GET | `/api/projects/{pid}` | project detail + its channels (with backfill state) |
+| PATCH | `/api/projects/{pid}` `{name?,description?,active?}` | update project |
+| DELETE | `/api/projects/{pid}` | delete project; detaches channels, deactivates orphans; **keeps channel data** |
+| POST | `/api/projects/{pid}/channels` `{url}` | resolve (1 API unit) + link; new channel → enqueue backfill; known channel → link only (dedup) |
+| GET | `/api/projects/{pid}/channels` | list the project's channels + backfill state (polling) |
+| DELETE | `/api/projects/{pid}/channels/{cid}` | detach; deactivates if orphaned; **keeps data** |
+
 ### Golden rule — timestamps are never invented
 
 The LLM receives **indexed** segments (`[i] M:SS text`) and returns only
@@ -279,9 +347,13 @@ time. This holds in both the CLI and the web app.
 - Download (URL, yt-dlp, ffmpeg): `src/primocut/download/audio.py`
 - Chat (optional): `src/primocut/chat/{downloader,signals}.py`
 - Models (resolve_span, clamp): `src/primocut/models.py`
-- Database (ORM, DAO, migrations): `src/primocut/db/`
+- Database (ORM, DAO, migrations): `src/primocut/db/` (Phase 2 DAO: `db/competitors.py`)
 - Diagnostics: `src/primocut/doctor.py`
 - Cross-cutting resilience (retry/backoff/classification): `src/primocut/resilience.py`
+- YouTube Data API v3 client (quota accounting, resolution, thumbnails): `src/primocut/youtube/`
+- Competitor channel registration/backfill (queue + job): `src/primocut/worker/channels.py`,
+  `src/primocut/worker/channel_jobs.py`
+- Projects/competitors API router: `src/primocut/api/projects.py`
 
 ---
 
@@ -321,6 +393,8 @@ and covered by tests**.
 | **Analysis (topics)** | LLM returns out-of-range indices | `resolve_span` **clamps** to the real limits and sorts them if reversed |
 | **Report** | Some section has no data | Renders "No topic identified" and/or "No chat replay"; never fails |
 | **Report** | The run had degradations | A **"⚠️ Degraded run"** section right after the metadata, listing what failed/was skipped |
+| **Channel backfill** | YouTube API error (quota/auth/network) | **Degrades**: the channel is marked `backfill_state="error"` with the message logged; the job returns instead of crashing the worker (per-channel isolation) |
+| **Channel backfill** | A thumbnail cannot be fetched/hashed | Stores an empty `thumbnail_hash` and continues (a missing hash never fails the backfill) |
 
 ### 4.2 Cache / resume (pay-once)
 
@@ -390,6 +464,9 @@ The analysis is provider-agnostic (`SelectionLLM` interface). Automatic selectio
 | `PRIMOCUT_RETRY_ATTEMPTS` / `PRIMOCUT_RETRY_BASE_DELAY` / `PRIMOCUT_RETRY_MAX_DELAY` | Retry (backoff) policy for the stages |
 | `PRIMOCUT_YTDLP_PLAYER_CLIENTS` | List of `player_client` values to try on download |
 | `PRIMOCUT_GPU_LOCK_TIMEOUT` | GPU lock timeout in Redis (auto-releases; default 2 h) |
+| `PRIMOCUT_YOUTUBE_API_KEY` | YouTube Data API v3 key (Phase 2 competitor modeling) |
+| `PRIMOCUT_YOUTUBE_SHORT_MAX_SECONDS` | Duration threshold for the `is_short` heuristic (default 60) |
+| `PRIMOCUT_YOUTUBE_BACKFILL_LIMIT` | Uploads collected on a new channel's backfill (default 120) |
 
 ---
 
@@ -423,6 +500,42 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 
 The most important section. **Never overwrite or delete an entry**: a reverted decision gets a
 **new** entry pointing to the reversal. Dates in ISO (`YYYY-MM-DD`).
+
+### 2026-07-14 · Phase 2 foundation: projects, global channels and the YouTube client
+**Type:** technical.
+**Decision:** implement the Phase 2 data foundation (no snapshots/metrics/enrichment/UI yet):
+`projects`, global `competitor_channels`, the `project_channels` M:N link and
+`competitor_videos`, plus a quota-accounted YouTube Data API v3 client, an async backfill job
+and the projects/competitors API + CLI. Key implementation decisions:
+- **New tables come from `create_all`, not a migration.** `create_all` creates any missing
+  table on both fresh and existing DBs (as it did for the v1 base); `NNN_*.sql` migrations are
+  reserved for `ALTER`/`DROP` that `create_all` cannot do. The ORM is the single source of
+  truth for table shape. Writing a redundant `CREATE TABLE` migration would either be a no-op
+  (with `IF NOT EXISTS`, since `create_all` always runs first) or crash ("table already
+  exists"), and would duplicate the DDL (drift risk). So: **no `005_*.sql`**.
+- **Quota accounting is in-memory + logged per operation** (`YouTubeClient.units_used`, one log
+  line per call with the cumulative total); the backfill logs the total consumed and the doctor
+  reports its probe's units. Batching is exploited: `videos.list` with up to 50 IDs = 1 unit.
+  **No DB persistence of quota yet** — that belongs with the scheduled snapshot cycles.
+- **`is_short` is a duration heuristic** (`duration_s <= PRIMOCUT_YOUTUBE_SHORT_MAX_SECONDS`,
+  default 60): the Data API does not flag Shorts. Refined in a later phase; it feeds the
+  separate Shorts baseline.
+- **Initial `thumbnail_hash` = SHA-256 of the thumbnail image bytes** (not the URL), computed at
+  backfill via an **injectable fetcher** (tests run without network); a fetch/hash failure
+  degrades to an empty hash. Byte hashing (vs. URL hashing) lets a later snapshot detect a
+  packaging change even when YouTube keeps the same thumbnail URL.
+- **Backfill progress lives on the channel row** (`backfill_state/done/total`), polled like the
+  video pipeline, because backfill runs once per channel globally (not per project link).
+- **Doctor requires `PRIMOCUT_YOUTUBE_API_KEY`** and validates it with a real 1-unit call
+  (fails when unset, consistent with the LLM provider key); check count 7 → 8.
+**Reason:** get the multi-project invariants (global dedup, orphan deactivation, data
+preservation on detach/delete) and the quota-safe collection primitive right first, so the
+snapshot/metrics engine builds on a correct foundation.
+**Rejected alternatives:** a redundant `005` `CREATE TABLE` migration (drift/no-op, see above);
+persisting quota to a table now (premature — no scheduled cycle yet); a separate `channel_jobs`
+table for backfill progress (the channel row already models a once-per-channel operation);
+`search.list` for resolution (100 units — avoided by mapping every reference to `id`/`forHandle`/
+`forUsername` at 1 unit).
 
 ### 2026-07-14 · Phase 2 redefined: competitor channel modeling (cutting/publishing shift to 3/4)
 **Type:** product/business.
