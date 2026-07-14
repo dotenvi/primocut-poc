@@ -17,7 +17,7 @@
   </nav>
 </header>
 
-<main>
+<main class:report={route.startsWith('/report/')}>
   {#if route.startsWith('/report/')}
     <Report id={route.split('/')[2]} />
   {:else if route === '/videos'}

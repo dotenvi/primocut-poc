@@ -111,6 +111,8 @@
 {#if !data}
   <p class="muted">Loading…</p>
 {:else}
+  <div class="report-layout" class:split={!running && tabs.length}>
+  <div class="report-main">
   <header class="report-head">
     <Player bind:this={playerRef} videoId={data.video.id} />
   </header>
@@ -136,7 +138,10 @@
     </section>
   {/if}
 
+  </div><!-- .report-main -->
+
   {#if !running && tabs.length}
+    <aside class="report-side">
     <article class="card tabs-card">
       <div class="tab-bar" role="tablist">
         {#each tabs as t (t.id)}
@@ -213,6 +218,8 @@
         </div>
       {/if}
     </article>
+    </aside>
   {/if}
+  </div><!-- .report-layout -->
 
 {/if}

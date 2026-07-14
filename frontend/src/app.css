@@ -59,6 +59,91 @@ a:hover { color: var(--tally); text-decoration: underline; text-underline-offset
 
 main { max-width: 900px; margin: 0 auto; padding: 28px 20px 88px; }
 section { margin: 28px 0; }
+
+/* Report — "watch" layout: sticky player on the left, tabs on the right.
+   Widens only on the report route; collapses to one column while the
+   pipeline is still running (no tabs yet) and on narrow screens. */
+main.report { max-width: 1720px; }
+.report-layout:not(.split) { max-width: 960px; margin: 0 auto; }
+.report-layout.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+.report-main { min-width: 0; }
+.report-side { min-width: 0; }
+.report-side .tabs-card { margin: 0; }
+
+/* Two-column view: turn the report route into a fixed-height app shell so the
+   panes never scroll off-screen — the page itself doesn't scroll, only the
+   Topics/Transcript list scrolls *inside* its card. Both panes stay put like
+   the player. Scoped to the finished `.split` view (the processing view keeps
+   normal page scroll) and to wide screens (mobile collapses to one column). */
+@media (min-width: 901px) {
+  body:has(.report-layout.split) { overflow: hidden; }
+  /* The app mounts into #app, so #app (not body) is the flex column that
+     holds the topbar + the viewport-filling main. */
+  body:has(.report-layout.split) #app {
+    height: 100vh; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  body:has(.report-layout.split) .topbar { flex: 0 0 auto; }
+  body:has(.report-layout.split) main.report {
+    flex: 1 1 auto; min-height: 0; overflow: hidden;
+    /* width:100% stops the flex item from shrinking to its content width
+       (margin:0 auto would otherwise make it max-content, so filtering the
+       transcript would shrink & re-center the whole page). */
+    width: 100%;
+    padding-top: 20px; padding-bottom: 20px;
+  }
+  /* min-height:0 on every flex/grid ancestor so they shrink to the viewport
+     instead of growing to content — otherwise the inner scroll never engages. */
+  .report-layout.split { height: 100%; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+  .report-layout.split .report-side { height: 100%; min-height: 0; }
+  /* The tab bar is a fixed header; overflow:hidden clips the scrolling list
+     (and the bar) to the card's rounded corners. */
+  .report-layout.split .tabs-card {
+    height: 100%; min-height: 0; padding: 0 24px; overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .report-layout.split .tab-bar { flex: 0 0 auto; margin-bottom: 0; }
+  .report-layout.split .tab-panel {
+    flex: 1 1 auto; min-height: 0; overflow: hidden auto;
+    /* reserve the scrollbar's space so filtering the list (bar appears/
+       disappears) doesn't reflow the content width. */
+    scrollbar-gutter: stable;
+    /* pull the scrollbar out to the card's right edge, keep content clear of it */
+    margin-right: -16px;
+    padding: 20px 20px 8px 0;
+  }
+  /* Chrome/Edge/Safari: style the legacy webkit scrollbar (thin, terracotta,
+     no arrow buttons). We deliberately do NOT set scrollbar-width/-color here:
+     when those standard props are present, Chrome ignores ::-webkit-scrollbar
+     and renders a fallback scrollbar that shows the OS arrow buttons. */
+  .report-layout.split .tab-panel::-webkit-scrollbar { width: 8px; }
+  .report-layout.split .tab-panel::-webkit-scrollbar-button { display: none; }
+  /* margin keeps the bar off the very top/bottom of the pane */
+  .report-layout.split .tab-panel::-webkit-scrollbar-track { background: transparent; margin: 8px 0; }
+  .report-layout.split .tab-panel::-webkit-scrollbar-thumb {
+    background: var(--tally); border-radius: 999px;
+    border: 2px solid transparent; background-clip: content-box;
+  }
+  /* Firefox has no ::-webkit-scrollbar; give it the standard props instead. */
+  @supports not selector(::-webkit-scrollbar) {
+    .report-layout.split .tab-panel {
+      scrollbar-width: thin; scrollbar-color: var(--tally) transparent;
+    }
+  }
+  /* transcript uses the pane's own scroll; keep its search pinned. */
+  .report-layout.split .transcript { max-height: none; }
+  .report-layout.split .tab-panel .search { position: sticky; top: 0; z-index: 1; }
+}
+@media (max-width: 900px) {
+  main.report { max-width: 900px; }
+  .report-layout.split { display: block; }
+  .report-side .tabs-card { margin: 24px 0; }
+}
 h1, h2, h3 { font-family: var(--f-label); font-weight: 600; letter-spacing: 0.01em; }
 h1 { font-size: 1.8rem; margin: 0 0 4px; }
 h2 { font-size: 1.25rem; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
