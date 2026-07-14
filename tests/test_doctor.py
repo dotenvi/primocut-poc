@@ -86,6 +86,30 @@ def test_check_llm_sdk_present(mocker):
     assert r.ok is True
 
 
+def test_check_youtube_api_absent():
+    r = doctor.check_youtube_api(Settings(youtube_api_key=None))
+    assert r.ok is False
+    assert "PRIMOCUT_YOUTUBE_API_KEY" in (r.fix or "")
+
+
+def test_check_youtube_api_valid(mocker):
+    from primocut.youtube.client import YouTubeClient
+
+    mocker.patch.object(YouTubeClient, "probe", return_value=1)
+    r = doctor.check_youtube_api(Settings(youtube_api_key="AIza-key"))
+    assert r.ok is True
+    assert "1 unit" in r.detail
+
+
+def test_check_youtube_api_bad_key(mocker):
+    from primocut.youtube.client import YouTubeClient, YouTubeError
+
+    mocker.patch.object(YouTubeClient, "probe", side_effect=YouTubeError("HTTP 403"))
+    r = doctor.check_youtube_api(Settings(youtube_api_key="bad"))
+    assert r.ok is False
+    assert "403" in r.detail
+
+
 def _fake_redis_ok(mocker):
     import redis
 
@@ -122,9 +146,9 @@ def test_run_diagnostics_aggregates(mocker, tmp_path):
 
     mocker.patch.object(redis.Redis, "from_url", side_effect=ConnectionError("down"))
     report = doctor.run_diagnostics(
-        Settings(anthropic_api_key=None, db_path=tmp_path / "x.db")
+        Settings(anthropic_api_key=None, youtube_api_key=None, db_path=tmp_path / "x.db")
     )
-    assert len(report.checks) == 7
+    assert len(report.checks) == 8
     assert report.ok is False
 
 
@@ -134,7 +158,14 @@ def test_run_diagnostics_all_ok(mocker, tmp_path):
     fake = subprocess.CompletedProcess(["nvidia-smi"], 0, "RTX 3070 Ti", "")
     mocker.patch.object(doctor.subprocess, "run", return_value=fake)
     _fake_redis_ok(mocker)
+    from primocut.youtube.client import YouTubeClient
+
+    mocker.patch.object(YouTubeClient, "probe", return_value=1)
     report = doctor.run_diagnostics(
-        Settings(anthropic_api_key="sk-ant-xyz", db_path=tmp_path / "x.db")
+        Settings(
+            anthropic_api_key="sk-ant-xyz",
+            youtube_api_key="AIza-key",
+            db_path=tmp_path / "x.db",
+        )
     )
     assert report.ok is True

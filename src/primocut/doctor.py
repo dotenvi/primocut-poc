@@ -113,6 +113,33 @@ def check_api_key(settings: Settings) -> CheckResult:
     )
 
 
+def check_youtube_api(settings: Settings) -> CheckResult:
+    """Validate the YouTube Data API key with a cheap real call (1 quota unit)."""
+    name = "YouTube Data API (PRIMOCUT_YOUTUBE_API_KEY)"
+    if not settings.youtube_api_key:
+        return CheckResult(
+            name=name,
+            ok=False,
+            detail="not set",
+            fix="Set PRIMOCUT_YOUTUBE_API_KEY (YouTube Data API v3 key; "
+            "free tier: 10,000 units/day).",
+        )
+    try:
+        from .youtube.client import YouTubeClient
+
+        client = YouTubeClient.from_settings(settings)
+        units = client.probe()
+    except Exception as exc:  # bad key / quota / network
+        return CheckResult(
+            name=name,
+            ok=False,
+            detail=str(exc),
+            fix="Check the key and that the YouTube Data API v3 is enabled with "
+            "available quota (Google Cloud Console).",
+        )
+    return CheckResult(name=name, ok=True, detail=f"valid ({units} unit consumed)")
+
+
 def check_redis(settings: Settings) -> CheckResult:
     """Redis reachable (RQ queue)."""
     name = "Redis"
@@ -175,6 +202,7 @@ def run_diagnostics(settings: Settings | None = None) -> DiagnosticsReport:
             check_ytdlp(),
             check_api_key(settings),
             check_llm_sdk(settings),
+            check_youtube_api(settings),
             check_redis(settings),
             check_db(settings),
         ]
