@@ -62,6 +62,17 @@ class VideoInfo:
     published_at: datetime | None
     duration_s: int
     thumbnail_url: str
+    view_count: int = 0
+    like_count: int = 0
+    comment_count: int = 0
+
+
+@dataclass
+class ChannelStats:
+    channel_id: str
+    subscribers: int
+    total_views: int
+    video_count: int
 
 
 def _urllib_transport(endpoint: str, params: dict) -> dict:
@@ -196,11 +207,37 @@ class YouTubeClient:
             chunk = video_ids[start : start + 50]
             data = self._call(
                 "videos",
-                {"part": "snippet,contentDetails", "id": ",".join(chunk), "maxResults": 50},
+                {
+                    "part": "snippet,contentDetails,statistics",
+                    "id": ",".join(chunk),
+                    "maxResults": 50,
+                },
                 cost=QUOTA_COSTS["videos.list"],
             )
             for item in data.get("items", []):
                 out.append(_parse_video(item))
+        return out
+
+    def get_channels_stats(self, channel_ids: list[str]) -> list[ChannelStats]:
+        """Fetch channel statistics in batches of 50 (channels.list, 1 unit/batch)."""
+        out: list[ChannelStats] = []
+        for start in range(0, len(channel_ids), 50):
+            chunk = channel_ids[start : start + 50]
+            data = self._call(
+                "channels",
+                {"part": "statistics", "id": ",".join(chunk), "maxResults": 50},
+                cost=QUOTA_COSTS["channels.list"],
+            )
+            for item in data.get("items", []):
+                stats = item.get("statistics", {})
+                out.append(
+                    ChannelStats(
+                        channel_id=item["id"],
+                        subscribers=_int(stats.get("subscriberCount")),
+                        total_views=_int(stats.get("viewCount")),
+                        video_count=_int(stats.get("videoCount")),
+                    )
+                )
         return out
 
     def probe(self) -> int:
@@ -252,13 +289,25 @@ def _best_thumbnail_url(thumbnails: dict) -> str:
     return ""
 
 
+def _int(value) -> int:
+    """Parse a stringy count from the API; missing/hidden counts become 0."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _parse_video(item: dict) -> VideoInfo:
     snippet = item.get("snippet", {})
     content = item.get("contentDetails", {})
+    stats = item.get("statistics", {})
     return VideoInfo(
         video_id=item["id"],
         title=snippet.get("title", ""),
         published_at=_parse_published_at(snippet.get("publishedAt", "")),
         duration_s=parse_iso8601_duration(content.get("duration", "")),
         thumbnail_url=_best_thumbnail_url(snippet.get("thumbnails", {})),
+        view_count=_int(stats.get("viewCount")),
+        like_count=_int(stats.get("likeCount")),
+        comment_count=_int(stats.get("commentCount")),
     )

@@ -56,6 +56,7 @@ def _video_item(vid, seconds="PT3M20S"):
             },
         },
         "contentDetails": {"duration": seconds},
+        "statistics": {"viewCount": "1000", "likeCount": "50", "commentCount": "7"},
     }
 
 
@@ -128,6 +129,45 @@ def test_list_videos_batches_50_ids_as_one_unit_each():
     # Each request carried at most 50 comma-joined ids.
     assert len(transport.calls[0][1]["id"].split(",")) == 50
     assert len(transport.calls[1][1]["id"].split(",")) == 10
+
+
+def test_list_videos_parses_statistics():
+    transport = FakeTransport({"videos": {"items": [_video_item("v1")]}})
+    client = YouTubeClient("KEY", transport=transport)
+    v = client.list_videos(["v1"])[0]
+    assert (v.view_count, v.like_count, v.comment_count) == (1000, 50, 7)
+    # statistics are requested alongside snippet/contentDetails.
+    assert "statistics" in transport.calls[0][1]["part"]
+
+
+def test_get_channels_stats_batches_and_parses():
+    payload = {
+        "items": [
+            {
+                "id": "UCa",
+                "statistics": {
+                    "subscriberCount": "1200",
+                    "viewCount": "999999",
+                    "videoCount": "42",
+                },
+            }
+        ]
+    }
+    transport = FakeTransport({"channels": payload})
+    client = YouTubeClient("KEY", transport=transport)
+    stats = client.get_channels_stats(["UCa"])
+    assert client.units_used == 1  # 1 unit per batch of up to 50
+    assert stats[0].subscribers == 1200
+    assert stats[0].total_views == 999999
+    assert stats[0].video_count == 42
+
+
+def test_hidden_like_count_becomes_zero():
+    item = _video_item("v1")
+    del item["statistics"]["likeCount"]  # likes can be hidden by the uploader
+    transport = FakeTransport({"videos": {"items": [item]}})
+    client = YouTubeClient("KEY", transport=transport)
+    assert client.list_videos(["v1"])[0].like_count == 0
 
 
 def test_list_uploads_pages_until_limit():
