@@ -10,7 +10,10 @@
 </script>
 
 <aside class="sidebar">
-  <a href="#/" class="brand">PRIMOCUT</a>
+  <a href="#/" class="brand">
+    <img src="/logo.png" alt="" class="brand-logo" />
+    PRIMOCUT
+  </a>
   <nav>
     <a href="#/" class:active={route === '/'}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

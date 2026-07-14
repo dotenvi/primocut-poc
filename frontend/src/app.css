@@ -52,9 +52,11 @@ a:hover { color: var(--tally); text-decoration: underline; text-underline-offset
   border-right: 1px solid var(--border); background: var(--panel);
 }
 .brand {
+  display: flex; align-items: center; gap: 10px;
   font-family: var(--f-label); font-weight: 700; font-size: 1.25rem;
   letter-spacing: 0.14em; color: var(--fg);
 }
+.brand-logo { width: auto; height: 40px; flex: none; object-fit: contain; }
 .brand:hover { color: var(--fg); text-decoration: none; }
 .sidebar nav { display: flex; flex-direction: column; gap: 4px; }
 .sidebar nav a {
