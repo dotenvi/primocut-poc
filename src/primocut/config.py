@@ -85,6 +85,17 @@ class Settings(BaseSettings):
     serve_host: str = "127.0.0.1"
     serve_port: int = 8000
 
+    # --- Phase 2: competitor modeling (YouTube Data API v3) ---
+    # Public-data API key (free tier: 10,000 quota units/day). The env_prefix
+    # makes this read from PRIMOCUT_YOUTUBE_API_KEY.
+    youtube_api_key: str | None = None
+    # A video is treated as a Short when its duration is at most this many
+    # seconds. The Data API does not flag Shorts, so this is a heuristic
+    # (refined in a later phase); it feeds the separate Shorts baseline.
+    youtube_short_max_seconds: int = 60
+    # How many recent uploads to backfill when a channel is new to the system.
+    youtube_backfill_limit: int = 120
+
 
 def get_settings() -> Settings:
     """Instantiate the settings reading environment/.env at call time."""
