@@ -13,6 +13,13 @@ from .logging_conf import setup_logging
 app = typer.Typer(help="PRIMOCUT", no_args_is_help=True)
 console = Console()
 
+projects_app = typer.Typer(help="Manage competitor projects", no_args_is_help=True)
+competitors_app = typer.Typer(
+    help="Manage competitor channels within a project", no_args_is_help=True
+)
+app.add_typer(projects_app, name="projects")
+app.add_typer(competitors_app, name="competitors")
+
 
 @app.command()
 def doctor() -> None:
@@ -172,6 +179,157 @@ def worker() -> None:
     conn = Redis.from_url(settings.redis_url)
     console.print(f"[green]Worker[/green] listening on queue '{settings.rq_queue}' at {settings.redis_url}")
     Worker([Queue(settings.rq_queue, connection=conn)], connection=conn).work()
+
+
+@projects_app.command("add")
+def projects_add(
+    name: str = typer.Argument(..., help="Project name (unique)"),
+    description: str = typer.Option("", "--description", "-d", help="Optional description"),
+) -> None:
+    """Create a competitor project."""
+    setup_logging()
+    from .db import competitors as crepo
+    from .db import get_database
+
+    settings = get_settings()
+    database = get_database(settings)
+    with database.session() as s:
+        try:
+            row = crepo.create_project(s, name, description)
+        except crepo.ProjectExistsError:
+            console.print(f"[red]A project named {name!r} already exists.[/red]")
+            raise typer.Exit(code=1)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=2)
+        console.print(f"[green]Project created:[/green] #{row.id} {row.name}")
+
+
+@projects_app.command("list")
+def projects_list() -> None:
+    """List competitor projects."""
+    setup_logging()
+    from .db import competitors as crepo
+    from .db import get_database
+
+    settings = get_settings()
+    database = get_database(settings)
+    table = Table(title="Projects")
+    table.add_column("ID", style="bold")
+    table.add_column("Name")
+    table.add_column("Channels")
+    table.add_column("Active")
+    with database.session() as s:
+        for p in crepo.list_projects(s):
+            count = len(crepo.list_project_channels(s, p.id))
+            table.add_row(str(p.id), p.name, str(count), "✅" if p.active else "—")
+    console.print(table)
+
+
+@projects_app.command("remove")
+def projects_remove(
+    project_id: int = typer.Argument(..., help="Project ID"),
+) -> None:
+    """Delete a project. Detaches its channels; never deletes channel data."""
+    setup_logging()
+    from .db import competitors as crepo
+    from .db import get_database
+
+    settings = get_settings()
+    database = get_database(settings)
+    with database.session() as s:
+        if not crepo.delete_project(s, project_id):
+            console.print(f"[red]Project #{project_id} not found.[/red]")
+            raise typer.Exit(code=1)
+    console.print(f"[green]Project #{project_id} deleted[/green] (channel data preserved).")
+
+
+@competitors_app.command("add")
+def competitors_add(
+    url: str = typer.Argument(..., help="Channel URL, @handle or channel ID"),
+    project: int = typer.Option(..., "--project", "-p", help="Project ID"),
+) -> None:
+    """Register a competitor channel in a project (backfills if new)."""
+    setup_logging()
+    from .db import get_database
+    from .youtube.client import YouTubeError
+    from .worker.channels import register_channel
+
+    settings = get_settings()
+    database = get_database(settings)
+    try:
+        result = register_channel(project, url, settings=settings, database=database)
+    except KeyError:
+        console.print(f"[red]Project #{project} not found.[/red]")
+        raise typer.Exit(code=1)
+    except (YouTubeError, ValueError) as exc:
+        console.print(f"[red]Could not register the channel:[/red] {exc}")
+        raise typer.Exit(code=1)
+
+    if result["existing"]:
+        console.print(
+            f"[green]Linked[/green] existing channel {result['channel_id']} "
+            f"({result['title']}) — no new collection."
+        )
+    else:
+        console.print(
+            f"[green]Registered[/green] {result['channel_id']} ({result['title']}); "
+            f"backfill queued (rq {result.get('rq_job_id')})."
+        )
+
+
+@competitors_app.command("detach")
+def competitors_detach(
+    channel_id: str = typer.Argument(..., help="Channel ID (UC...)"),
+    project: int = typer.Option(..., "--project", "-p", help="Project ID"),
+) -> None:
+    """Detach a channel from a project. Keeps all data; deactivates if orphaned."""
+    setup_logging()
+    from .db import get_database
+    from .worker.channels import detach_channel
+
+    settings = get_settings()
+    database = get_database(settings)
+    try:
+        result = detach_channel(project, channel_id, settings=settings, database=database)
+    except KeyError:
+        console.print(f"[red]Project #{project} not found.[/red]")
+        raise typer.Exit(code=1)
+
+    if not result["detached"]:
+        console.print(
+            f"[yellow]Channel {channel_id} was not linked to project #{project}.[/yellow]"
+        )
+        return
+    tail = " (now orphaned → deactivated)" if result["deactivated"] else ""
+    console.print(f"[green]Detached[/green] {channel_id} from project #{project}{tail}.")
+
+
+@competitors_app.command("list")
+def competitors_list(
+    project: int = typer.Option(..., "--project", "-p", help="Project ID"),
+) -> None:
+    """List the channels of a project with their backfill state."""
+    setup_logging()
+    from .db import competitors as crepo
+    from .db import get_database
+
+    settings = get_settings()
+    database = get_database(settings)
+    with database.session() as s:
+        if crepo.get_project(s, project) is None:
+            console.print(f"[red]Project #{project} not found.[/red]")
+            raise typer.Exit(code=1)
+        channels = crepo.list_project_channels(s, project)
+        table = Table(title=f"Channels — project #{project}")
+        table.add_column("Channel ID", style="bold")
+        table.add_column("Title")
+        table.add_column("Backfill")
+        table.add_column("Active")
+        for c in channels:
+            state = f"{c.backfill_state} ({c.backfill_done}/{c.backfill_total})"
+            table.add_row(c.channel_id, c.title, state, "✅" if c.active else "—")
+    console.print(table)
 
 
 if __name__ == "__main__":
