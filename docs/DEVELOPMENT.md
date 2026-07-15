@@ -307,6 +307,13 @@ A channel that is new to the system triggers a backfill of its last 120 uploads;
 already known is only linked (global dedup, no re-collection). Detaching a channel that ends
 up orphaned from every project deactivates it (`active=false`) but keeps all its data.
 
+The backfill also writes the channel's **first snapshot**, so the dashboards have data as soon
+as the channel is added rather than staying empty until the first scheduled cycle (up to 24h).
+The per-video counters are free — they ride along in the `videos.list` response the backfill
+already makes; only the channel statistics add a call (1 unit). Views-per-hour and resurgences
+still need a **second** snapshot: they come from deltas between snapshots and are never
+fabricated from totals, so they stay empty until the first cycle runs.
+
 **Continuous collection** (snapshots). Start the scheduler alongside the worker; it enqueues the
 snapshot cycles onto the same queue (Redis must be up):
 
@@ -456,9 +463,10 @@ pytest tests/test_pipeline.py -v              # end-to-end with fakes
 
 The suite also covers (Phase 1): migrations/DAO, job state transitions, **idempotent
 re-enqueue (cache respected)** and API endpoints. Phase 2 foundation: YouTube client with
-**quota accounting** (fully faked, no network), channel resolution, backfill of 120,
-**cross-project dedup**, detach/delete **data preservation**, **orphan deactivation**, and
-the projects/competitors API + CLI. Phase 2 continuous collection: **frequency selection**
+**quota accounting** (fully faked, no network), channel resolution, backfill of 120, the
+backfill's **first channel+video snapshots** (shared `captured_at`, degrading when the channel
+stats fail), **cross-project dedup**, detach/delete **data preservation**, **orphan
+deactivation**, and the projects/competitors API + CLI. Phase 2 continuous collection: **frequency selection**
 (daily vs 6h), snapshot recording, **new-video detection**, **title change**, **thumbnail
 change by byte hash under an unchanged URL**, **per-channel isolation**, orphan exclusion,
 per-cycle quota, and idempotent scheduler registration (all faked, no network). Phase 2 metrics
@@ -550,7 +558,9 @@ carry only the imperative deltas.
   The `ondelete=CASCADE` lives **only** on `project_channels`, so deleting a project detaches
   its channels without ever touching channel/video data; a channel orphaned from every project
   is set `active=false` in code (never deleted). A channel's `backfill_state/done/total` is
-  polled like the video pipeline; the backfill runs once per channel, globally.
+  polled like the video pipeline; the backfill runs once per channel, globally, and writes that
+  channel's first `channel_snapshots`/`video_snapshots` rows. Every **later** snapshot comes
+  from `snapshot_cycle`, which stays the sole continuous collector.
 
 - **Snapshot scheduler:** `primocut scheduler` runs rq-scheduler, which registers two cron jobs
   (idempotent, cancel-by-id) of the same `snapshot_cycle(scope)` function — `scope="all"` daily,
@@ -709,6 +719,7 @@ and covered by tests**.
 | **Report** | The run had degradations | A **"⚠️ Degraded run"** section right after the metadata, listing what failed/was skipped |
 | **Channel backfill** | YouTube API error (quota/auth/network) | **Degrades**: the channel is marked `backfill_state="error"` with the message logged; the job returns instead of crashing the worker (per-channel isolation) |
 | **Channel backfill** | A thumbnail cannot be fetched/hashed | Stores an empty `thumbnail_hash` and continues (a missing hash never fails the backfill) |
+| **Channel backfill** | The first channel snapshot fails (`channels.list`) | Isolated in its own step: logged and skipped; the uploads and the `done` state are kept (they are the point of the backfill). The next cycle records the channel stats |
 | **Snapshot cycle** | A channel's API/thumbnail call fails | **Per-channel isolation**: the error is logged and the cycle moves to the next channel; it never aborts the whole cycle nor lets the exception crash the scheduler |
 | **Snapshot cycle** | A thumbnail cannot be fetched/hashed | Empty hash; no spurious packaging-change event (a change needs both old and new hashes non-empty) |
 | **Snapshot cycle** | Channel deactivated (orphaned) | Excluded from selection — collection stops until the channel is re-linked (`active=true`) |
