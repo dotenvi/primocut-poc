@@ -23,14 +23,14 @@ From a URL, a navigable report containing:
 - Macro-topics in chronological order (**opt-in — costs LLM**): title, short summary, start/end timestamp, clip-potential score. Topic count is unbounded: one topic per genuinely distinct subject.
 - CLI equivalent (`primocut run`) producing the same report as Markdown + JSON.
 
-## Competitor channel modeling (Phase 2 — in progress)
+## Competitor channel modeling (Phase 2 — delivered)
 
 Given competitor channels supplied by the user (no niche-wide discovery), grouped into **projects**:
 
 - **Projects**: competitor channels are global entities linked to projects via M:N. The same channel in two projects is collected once; per-channel metrics are computed once; niche-level reports (rankings, pattern distributions) are scoped per project so one niche never contaminates another. Detaching a channel keeps its history; orphaned channels stop being collected until re-linked.
 - **Continuous collection** (YouTube Data API v3): backfill of the last 120 videos per new channel; snapshots daily for all videos and every 6h for videos younger than 7 days (views, likes, comment counts, channel stats); packaging-change detection by comparing title strings and thumbnail **content hashes** between snapshots; quota accounting on every cycle.
 - **Metrics engine** (deterministic, no LLM cost): outlier score against the channel **median** over a rolling window, with separate baselines for Shorts vs long-form, provisional scores under 7 days of age and brackets 3x/6x/10x; views-per-hour from snapshot deltas; resurgence alerts for old videos rising again; packaging-change before/after impact; engagement rates; cadence; per-project conditional distributions of title/thumbnail attributes (minimum-occurrence guard before any pattern is reported).
-- **AI enrichment (opt-in — costs LLM)**: structured thumbnail attributes via vision model and title semantics via cheap model, cached by content hash and shared across projects. **Comments**: collection is automatic (top-liked comments fetched when a video crosses the outlier threshold, stored raw); only the LLM synthesis pass (recurring themes + explicit audience requests) is triggered manually.
+- **AI enrichment (opt-in — costs LLM)**: structured thumbnail attributes via vision model and title semantics via cheap model, cached by content hash and shared across projects. **Comments**: collection is automatic (top-liked comments fetched when a video is a definitive outlier, stored raw, quota-accounted); only the LLM synthesis pass is triggered manually — recurring themes, overall sentiment and the audience's **explicit requests** (guests, subjects, formats), which the project dashboard aggregates into a ranked demand list for the niche. Every quote it shows is a real comment: the model selects comment indices, never text.
 - Private YouTube Analytics data (CTR, retention, impressions) is unavailable for third-party channels and is not modeled.
 
 ## Execution context
@@ -91,12 +91,12 @@ Competitor modeling:
 - **Project**: id, name, description, active
 - **CompetitorChannel** (global): channel_id, handle, title, uploads_playlist_id, active — linked to projects via **ProjectChannel** (M:N)
 - **ChannelSnapshot**: channel_id, captured_at, subscribers, total_views, video_count
-- **CompetitorVideo**: channel_id, video_id, title, published_at, duration_s, is_short, thumbnail_hash
+- **CompetitorVideo**: channel_id, video_id, title, published_at, duration_s, is_short, thumbnail_hash, comments_state
 - **VideoSnapshot**: video_id, captured_at, views, likes, comments
 - **PackagingChange**: video_id, field (title|thumbnail), old/new value, detected_at, vph_before/vph_after
 - **VideoAttributes**: video_id, source (syntactic|title_llm|thumbnail_llm), attributes JSON, content_hash
 - **VideoComments**: video_id, comment_id, text, like_count, author, fetched_at (top comments of outliers, collected automatically)
-- **VideoEnrichment**: video_id, kind (comment_synthesis), payload JSON
+- **VideoEnrichment**: video_id, kind (comment_synthesis), payload JSON, content_hash — kept apart from VideoAttributes so a narrative synthesis never counts as a packaging pattern
 
 Outlier scores and VPH are computed on read (over snapshots), never stored.
 
@@ -119,6 +119,6 @@ Outlier scores and VPH are computed on read (over snapshots), never stored.
 
 - **Phase 0 — CLI spike ✅:** command-line script: URL → audio → transcription → chat → topics in Markdown. Validated GPU on WSL2, macro-topic segmentation quality and chat peak detection.
 - **Phase 1 — MVP ✅:** queue + database + web UI + navigable report with embedded player.
-- **Phase 2 — Competitor channel modeling (in progress):** as specified in the section above; milestones M1–M6 and their approved decisions live in DEVELOPMENT.md.
-- **Phase 3 — Assisted cutting:** automatic clip generation with FFmpeg; evaluate WhisperX (word-level timestamps + diarization); may leverage niche intelligence from Phase 2 to prioritize what to cut.
+- **Phase 2 — Competitor channel modeling ✅:** as specified in the section above; the six delivery steps and their approved decisions live in DEVELOPMENT.md.
+- **Phase 3 — Assisted cutting (next):** automatic clip generation with FFmpeg; evaluate WhisperX (word-level timestamps + diarization); may leverage niche intelligence from Phase 2 to prioritize what to cut.
 - **Phase 4 — Publishing:** AI titles/descriptions, vertical format, upload via the YouTube API, multi-user.

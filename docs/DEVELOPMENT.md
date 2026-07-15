@@ -89,7 +89,25 @@ targets the **definitive outliers only** (the same set the patterns read), runs 
 with **per-video isolation** (one failure never aborts it) and surfaces the error on the row
 itself. Multi-provider is preserved (Anthropic default); `PRIMOCUT_ENRICH_TITLE_MODEL` /
 `PRIMOCUT_ENRICH_VISION_MODEL` optionally point a pass at a cheaper model.
-**Not yet built:** comment collection + synthesis.
+
+**Comments** close Phase 2, and are split by cost. **Collection is automatic**: each
+snapshot cycle asks which videos are definitive outliers *now* and fetches their top
+comments once (`commentThreads`, `order=relevance`, `PRIMOCUT_YOUTUBE_COMMENT_PAGES`
+pages of 100 = 1 quota unit each, folded into the cycle's total) into `video_comments`.
+It is **level-triggered, not edge-detected** — no score is stored to diff against, so
+each cycle re-asks and skips whatever `competitor_videos.comments_state` settles
+(`done`/`disabled` are terminal; `error` retries next cycle). **Synthesis is manual**
+(guideline 9): one forced-tool-use pass over the *already stored* comments records
+recurring themes, the audience's **explicit requests** (guest/topic/format/other) and
+overall sentiment into `video_enrichments` (`kind=comment_synthesis`) — triggered by the
+video-detail button, the project-dashboard batch, `POST …/enrich {kind:"comments"}` or
+`primocut metrics enrich --kind comments`, never by the scheduler. The **golden rule
+covers quotes**: comments reach the model **indexed** and it returns only an
+`example_index`, which the code resolves and **clamps** back to a real stored comment —
+it cannot invent audience words, exactly as it cannot invent a timestamp. Paid once by a
+content hash over the comment set; **Regenerate** re-fetches then re-reads. The project
+dashboard aggregates the requests **in code** (no second LLM pass), merged on a
+normalised key and ranked by *how many videos asked*.
 
 **Phase 2 UI** is in place: a **Competitors** section in the SPA (`#/projects…`), where a
 **project selector** (create/rename/remove — removing detaches channels and says the data is
@@ -106,8 +124,11 @@ where VPH cannot be computed, a suppressed-pattern message, and — for a channe
 score — **"Collecting data — provisional scores from tomorrow."** instead of an empty screen.
 Charts are hand-built (inline SVG / CSS bars); no chart library was added. The video detail
 also carries the two **opt-in AI panels** (analyse/re-analyse, a live state while the call
-runs, and the failure message in place of a blank panel); the project dashboard carries the
-batch action and tags each reported pattern with its **source**.
+runs, and the failure message in place of a blank panel) and the **Audience comments** panel
+(the collected count, then synthesise/re-synthesise + **Regenerate**, the themes and requests
+each shown with a **real quoted comment**, or the note that comments are disabled); the
+project dashboard carries the batch actions, tags each reported pattern with its **source**,
+and shows **Audience requests** as one column per request type the niche actually used.
 
 The pipeline runs, in order: **audio (yt-dlp → FFmpeg 16 kHz mono) → chat replay (optional)
 → transcription (faster-whisper `large-v3-turbo`, GPU) → analysis (LLM, macro topics)**.
@@ -342,10 +363,29 @@ Either way the work is **paid for once**: a video is re-analysed only when its c
 changes (the title string; the thumbnail's image bytes), and the result is shared by every
 project tracking the channel — re-running a batch reports the untouched ones as *cached*.
 The thumbnail pass needs a **vision-capable** model and a `thumbnail_hash` already collected
-(run a snapshot cycle first). By default both passes use the selected provider's configured
+(run a snapshot cycle first). By default every pass uses the selected provider's configured
 model; point one at a cheaper model with `PRIMOCUT_ENRICH_TITLE_MODEL` /
-`PRIMOCUT_ENRICH_VISION_MODEL` (a model id is provider-specific — only valid for the provider
-in use).
+`PRIMOCUT_ENRICH_VISION_MODEL` / `PRIMOCUT_ENRICH_COMMENTS_MODEL` (a model id is
+provider-specific — only valid for the provider in use).
+
+**Comments: collected free, synthesised on demand.** Nothing extra to run — the snapshot
+cycle collects the top comments of every **definitive outlier**, once per video, spending
+`PRIMOCUT_YOUTUBE_COMMENT_PAGES` (2) quota units and **no** LLM call. Reading them is the
+opt-in half:
+
+```bash
+primocut metrics enrich --video <VID> --kind comments      # one video
+primocut metrics enrich --project <PID> --kind comments    # the project's definitive outliers
+primocut metrics enrich --video <VID> --kind comments --regenerate   # re-fetch, then re-read
+```
+
+Same triggers over HTTP/UI as the packaging passes (`{kind: "comments"}`; the video detail's
+**✨ Synthesise comments**, the dashboard's **✨ Synthesise outlier comments**). Without
+`--regenerate` the pass is **paid once**: it is skipped for free while the collected comment
+set is unchanged. A video with comments **disabled** is recorded as such and never asked
+again — synthesising it fails with that message rather than calling the LLM. The project
+dashboard's **Audience requests** merges every synthesis of the project (in code, no extra
+LLM call), ranked by how many videos asked for each thing.
 
 ### 2.9 Competitors UI — manual smoke test
 
@@ -376,7 +416,16 @@ backfill), then open `http://127.0.0.1:8000/#/projects`:
    grows AI rows tagged `thumbnail_llm` once enough outliers are enriched to clear the
    minimum-occurrence guard. To see the failure path, point `ANTHROPIC_API_KEY` at a bad key:
    the panel must render the error text and the polling must stop.
-5. **Guard states (the important ones).** A channel too fresh to score must show
+5. **Comments (collection is free; only the synthesis spends).** After a snapshot cycle in which
+   a video sits at ≥3x, its video detail must show *"N top comments collected automatically (no
+   AI cost)"* — and a video below 3x must show none (the collection is deliberately outlier-only).
+   **✨ Synthesise comments with AI** → *Synthesising the comments…* → themes and requests, each
+   with a **real quoted comment**; the button becomes **Re-synthesise** and clicking it again
+   charges nothing (`0 enriched, 1 cached`), while **Regenerate** re-fetches and re-reads. A
+   video with comments disabled must say so and offer no button. The project dashboard's
+   **Audience requests** must merge the same request across videos into one row with its video
+   count.
+6. **Guard states (the important ones).** A channel too fresh to score must show
    **"Collecting data — provisional scores from tomorrow."** instead of an empty dashboard; a
    video under 7 days must carry the amber **provisional** pill; a format with too few peers
    must read **insufficient data**; a video with a single snapshot must show **`—`** for VPH
@@ -427,7 +476,17 @@ refusal**, **the batch targeting definitive outliers only** (a provisional 10x i
 un-enriched video is *unknown*, not "attribute absent" — the test pins the honest lift of 1.0
 against the fabricated 3.0), **suppression while enrichment is sparse**, the **vision plumbing
 of each provider** (base64 block vs data-URL, forced tool use, model override), and — the cost
-guard — **a full `snapshot_cycle` + `metrics refresh` writing no LLM-sourced row**.
+guard — **a full `snapshot_cycle` + `metrics refresh` writing no LLM-sourced row**. Phase 2
+comments (API + LLM faked, no key/network): **the collection trigger** (a 2x video is not
+touched; the same video at 3x is), **collect-once**, **the paged fetch** (page cap, `pageToken`
+threading, early stop) with **its quota folded into the cycle's total**, **comments disabled
+degrading to a terminal state** (the cycle completes and never asks again) vs. **a fetch error
+retried next cycle**, the **pay-once synthesis cache** and **explicit regeneration** (re-fetch +
+re-read), **`regenerate` rejected for the packaging kinds**, **refusing to synthesise with
+nothing collected** (no LLM call), the **model override**, the **golden rule for quotes** (an
+out-of-range `example_index` clamps to a real comment), the **project-scoped request
+aggregation** (spelling variants merge; another project never leaks in), and — the cost guard —
+**a full cycle over a 10x outlier collecting comments while writing no synthesis row**.
 
 ---
 
@@ -462,12 +521,19 @@ guard — **a full `snapshot_cycle` + `metrics refresh` writing no LLM-sourced r
 
 Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations`, the Phase 2
 foundation `projects, competitor_channels, project_channels, competitor_videos`, the
-collection time series `channel_snapshots, video_snapshots, packaging_changes`, and the metrics
+collection time series `channel_snapshots, video_snapshots, packaging_changes`, the metrics
 artifact `video_attributes` (persisted packaging features, unique per `(video_id, source)`:
 `syntactic` = free/deterministic, `title_llm`/`thumbnail_llm` = the opt-in AI enrichment, each
-content-hash gated and carrying its own `state`/`error`). Outlier scores, VPH, resurgence and
-pattern distributions are computed on read over the snapshots — never stored; the only
-persisted derived figures are `video_attributes` and `packaging_changes.vph_before/after`.
+content-hash gated and carrying its own `state`/`error`), and the comment pair
+`video_comments` (raw top comments of outliers, unique per `(video_id, comment_id)`, collected
+automatically — the collection state lives on `competitor_videos.comments_state`) +
+`video_enrichments` (the opt-in LLM syntheses, unique per `(video_id, kind)`, today only
+`comment_synthesis`; same content-hash/`state`/`error` contract as `video_attributes`, but a
+**separate table on purpose** — `metrics.patterns` reports every boolean of an attributes row
+as a packaging pattern, and a narrative synthesis must not reach the distributions).
+Outlier scores, VPH, resurgence and pattern distributions are computed on read over the
+snapshots — never stored; the only persisted derived figures are `video_attributes`,
+`video_enrichments` and `packaging_changes.vph_before/after`.
 Simple migrations: base schema via `create_all` (v1) + `db/migrations/NNN_*.sql` deltas.
 The runner tolerates a duplicate-column error on `ADD COLUMN`, so column-adding deltas are
 no-ops on fresh databases (where `create_all` already added the column from the model).
@@ -492,8 +558,13 @@ carry only the imperative deltas.
   executes them. The daily hour is offset from the 6h grid so the two never fire in the same
   minute. Selection: `all` → every video of active channels; `recent` → the same, filtered to
   `published_at >= now - youtube_recent_days`. One `YouTubeClient` per cycle gives a per-cycle
-  quota total (logged); channels are processed in isolation. Code: `worker/scheduler.py`,
-  `worker/snapshot_jobs.py`.
+  quota total (logged); channels are processed in isolation. After the channel loop the cycle
+  runs two **sibling steps**, each isolated: the metrics artifacts (deterministic, offline) and
+  the **comment collection** (network + quota, hence not folded into the first). The latter is
+  **level-triggered** — it asks `definitive_outlier_ids_for_channel` who qualifies *now* and
+  skips whatever `comments_state` settles — because guideline 10 stores no score to detect a
+  rising edge with. Code: `worker/scheduler.py`, `worker/snapshot_jobs.py`,
+  `worker/comment_collection.py`.
 
 - `Video.status`: `queued → downloading → transcribing → analyzing → done | error`;
   **`stopped`** when interrupted (via `stop`). `reenqueue` reuses the cache; `DELETE` removes
@@ -535,16 +606,16 @@ Phase 2 metrics dashboards (computed on read; **pure reads, no writes**):
 
 | Method | Route | Action |
 |---|---|---|
-| GET | `/api/projects/{pid}/dashboard` | niche outlier ranking, per-project attribute patterns (guarded), packaging with before/after impact, resurgences |
+| GET | `/api/projects/{pid}/dashboard` | niche outlier ranking, per-project attribute patterns (guarded), aggregated audience requests, packaging with before/after impact, resurgences |
 | GET | `/api/channels/{cid}/dashboard` | per-format baselines, outlier ranking, engagement medians, cadence, resurgences |
-| GET | `/api/channels/{cid}/videos/{vid}` | snapshot series, VPH (current + pairwise), outlier score, engagement, resurgence, attributes per source (syntactic + the AI ones with their state/error), packaging changes |
+| GET | `/api/channels/{cid}/videos/{vid}` | snapshot series, VPH (current + pairwise), outlier score, engagement, resurgence, attributes per source (syntactic + the AI ones with their state/error), collected-comment count/state, the comment synthesis (or null), packaging changes |
 
 Phase 2 AI enrichment (**opt-in — costs an LLM call**; enqueues only, never calls the LLM
 inside the request):
 
 | Method | Route | Action |
 |---|---|---|
-| POST | `/api/channels/{cid}/videos/{vid}/enrich` `{kind}` | enrich one video's `thumbnail` or `title` (202; 400 on an unknown kind) |
+| POST | `/api/channels/{cid}/videos/{vid}/enrich` `{kind, regenerate?}` | enrich one video's `thumbnail`/`title`, or synthesise its `comments` (202; 400 on an unknown kind, or on `regenerate` for a packaging kind — it has nothing to re-fetch) |
 | POST | `/api/projects/{pid}/enrich` `{kind}` | enrich the project's **definitive outliers** (202; returns how many were queued) |
 
 ### Golden rule — timestamps are never invented
@@ -553,6 +624,11 @@ The LLM receives **indexed** segments (`[i] M:SS text`) and returns only
 `start_index`/`end_index` (forced tool use); the code resolves the indices → seconds from the
 transcript and **clamps** out-of-range indices. It is *impossible* for the LLM to invent a
 time. This holds in both the CLI and the web app.
+
+The **comment synthesis applies the same rule to quotes**: the comments arrive indexed
+(`[i] (N likes) text`) and the model returns only an `example_index`, which
+`metrics/comments.py:resolve_example` resolves and clamps back to a stored comment. Every
+quoted word on screen is a word the audience actually wrote.
 
 ### Code pointers
 
@@ -569,14 +645,18 @@ time. This holds in both the CLI and the web app.
 - YouTube Data API v3 client (quota accounting, resolution, thumbnails): `src/primocut/youtube/`
 - Metrics engine (pure core + persistence + dashboards): `src/primocut/metrics/`
   (`core.py` = DB-free methodology; `attributes.py`/`impact.py` = the free persisted artifacts;
-  `enrichment.py` = the opt-in AI attributes (hash gate, derived facets); `patterns.py` =
-  per-project distributions; `service.py` = dashboard payloads + the batch target). HTTP
-  routers: `api/metrics.py` (channel/video + single-video enrich) + the project dashboard and
-  batch enrich in `api/projects.py`.
+  `enrichment.py` = the opt-in AI passes (hash gate per kind, derived facets, store dispatch);
+  `comments.py` = the synthesis hash/prompt/quote resolution + the request aggregation;
+  `patterns.py` = per-project distributions; `service.py` = dashboard payloads + the batch and
+  per-channel outlier targets). HTTP routers: `api/metrics.py` (channel/video + single-video
+  enrich) + the project dashboard and batch enrich in `api/projects.py`.
 - AI enrichment (tool schemas + job): `src/primocut/analysis/enrichment_prompts.py`,
-  `src/primocut/worker/enrich_jobs.py` (per-video isolation), enqueued by
-  `worker/queue.py:enqueue_enrichment`. Vision (base64/data-URL blocks) and the per-call model
-  override live in `analysis/llm.py`, behind the same `SelectionLLM` protocol.
+  `src/primocut/worker/enrich_jobs.py` (per-video isolation; one function for all three kinds),
+  enqueued by `worker/queue.py:enqueue_enrichment`. Vision (base64/data-URL blocks) and the
+  per-call model override live in `analysis/llm.py`, behind the same `SelectionLLM` protocol.
+- Comment collection (automatic, inside the snapshot cycle):
+  `src/primocut/worker/comment_collection.py`; the API call is
+  `youtube/client.py:list_top_comments`.
 - Competitor channel registration/backfill (queue + job): `src/primocut/worker/channels.py`,
   `src/primocut/worker/channel_jobs.py`
 - Snapshot collection (cycle job + scheduler): `src/primocut/worker/snapshot_jobs.py`,
@@ -633,6 +713,11 @@ and covered by tests**.
 | **Snapshot cycle** | A thumbnail cannot be fetched/hashed | Empty hash; no spurious packaging-change event (a change needs both old and new hashes non-empty) |
 | **Snapshot cycle** | Channel deactivated (orphaned) | Excluded from selection — collection stops until the channel is re-linked (`active=true`) |
 | **Snapshot cycle** | Metrics-artifact persistence fails (attributes/impact) | Isolated in its own step: logged and skipped, **never affecting the collected snapshots** of the cycle |
+| **Comment collection** | The uploader disabled comments (HTTP 403 `commentsDisabled`) | Recorded as the **terminal** `comments_state="disabled"` and skipped: it is a permanent fact, not a failure, so the cycle stops asking. The UI says so; a synthesis refuses with that message instead of calling the LLM |
+| **Comment collection** | Any other fetch failure (quota, network, malformed page) | **Per-video isolation**: logged, `comments_state="error"` with the message, the cycle continues. Not terminal — the next cycle retries that video |
+| **Comment collection** | Selecting the outliers fails | Isolated in its own step: logged, zero collected, **never affecting the collected snapshots** |
+| **Comment synthesis** | No comments collected / collection disabled or errored | Refuses **without calling the LLM**, and the row's error says which of the three it was (there is nothing to hash, so every click would recharge) |
+| **Comment synthesis** | Model returns an off-schema payload or an out-of-range `example_index` | Every field is read defensively (missing → neutral) and each index is **clamped** to a real stored comment, so a sloppy response degrades the payload instead of breaking the row or inventing a quote |
 | **Metrics dashboards** | Too few videos / a single snapshot | **Degrade, not crash**: an outlier score becomes `insufficient_data`, a VPH becomes `None`, a small-sample pattern is suppressed — the dashboard still renders |
 | **AI enrichment** | One video's LLM/thumbnail call fails | **Per-video isolation**: logged, the row is marked `state="error"` with the message (which the UI renders in place of a blank panel), and the batch continues. The content hash is cleared so the next explicit click retries only that video |
 | **AI enrichment** | The thumbnail was never byte-hashed (`thumbnail_hash=""`) | Refuses without calling the LLM: with no cache key every click would recharge. Surfaces as the row's error, asking for a snapshot cycle first |
@@ -709,6 +794,7 @@ The analysis is provider-agnostic (`SelectionLLM` interface). Automatic selectio
 | `PRIMOCUT_YOUTUBE_API_KEY` | YouTube Data API v3 key (Phase 2 competitor modeling) |
 | `PRIMOCUT_YOUTUBE_SHORT_MAX_SECONDS` | Duration threshold for the `is_short` heuristic (default 60) |
 | `PRIMOCUT_YOUTUBE_BACKFILL_LIMIT` | Uploads collected on a new channel's backfill (default 120) |
+| `PRIMOCUT_YOUTUBE_COMMENT_PAGES` | Pages of top comments collected per outlier (default 2 = up to 200 comments, 1 quota unit per page). Costs no LLM call |
 | `PRIMOCUT_SNAPSHOT_DAILY_CRON` / `PRIMOCUT_SNAPSHOT_RECENT_CRON` | Snapshot cadences (daily / 6h) |
 | `PRIMOCUT_OUTLIER_WINDOW_VIDEOS` / `PRIMOCUT_OUTLIER_WINDOW_DAYS` | Baseline rolling window (smaller of the two) |
 | `PRIMOCUT_OUTLIER_MIN_SAMPLE` / `PRIMOCUT_OUTLIER_PROVISIONAL_DAYS` / `PRIMOCUT_OUTLIER_BRACKETS` | Insufficient-data guard, provisional cutoff, bracket tiers |
@@ -716,7 +802,7 @@ The analysis is provider-agnostic (`SelectionLLM` interface). Automatic selectio
 | `PRIMOCUT_RESURGENCE_K` / `PRIMOCUT_RESURGENCE_MIN_AGE_DAYS` / `PRIMOCUT_RESURGENCE_BASELINE_DAYS` / `PRIMOCUT_RESURGENCE_MIN_VPH` | Resurgence detection |
 | `PRIMOCUT_PACKAGING_IMPACT_WINDOW_DAYS` | Before/after window for packaging impact (default 7) |
 | `PRIMOCUT_PATTERN_MIN_OCCURRENCE` / `PRIMOCUT_PATTERN_OUTLIER_BRACKET` | Pattern minimum-occurrence guard + outlier threshold (the latter is also the batch-enrichment target) |
-| `PRIMOCUT_ENRICH_TITLE_MODEL` / `PRIMOCUT_ENRICH_VISION_MODEL` | Model override for the opt-in enrichment passes. **Empty (default) = the selected provider's configured model**; a model id is provider-specific, and the vision one must support image input |
+| `PRIMOCUT_ENRICH_TITLE_MODEL` / `PRIMOCUT_ENRICH_VISION_MODEL` / `PRIMOCUT_ENRICH_COMMENTS_MODEL` | Model override for the opt-in enrichment passes. **Empty (default) = the selected provider's configured model**; a model id is provider-specific, and the vision one must support image input |
 
 ---
 
@@ -731,14 +817,23 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 - **Phase 1 — Web MVP ✅ (done / current base).** Queue (RQ+Redis) + database (SQLite) + API
   (FastAPI) + navigable UI (Svelte) + navigable report +
   embedded player with seek + opt-in topic generation.
-- **Phase 2 — Competitor channel modeling (next).** Given a **user-provided** set of competitor
+- **Phase 2 — Competitor channel modeling ✅ (done).** Given a **user-provided** set of competitor
   channels, continuously collect **public** performance data and reveal what is working in the
-  niche — outlier videos, packaging patterns (title/thumbnail), posting strategy and winning
-  topics — to guide PRIMOCUT's editorial decisions. Channels are supplied by the user (no
-  niche-wide channel discovery). **Out of scope:** anything that depends on private YouTube
-  Analytics (CTR, retention, impressions — unavailable for third-party channels); clip
-  generation/WhisperX (now Phase 3). See the [2026-07-14 decision](#2026-07-14--phase-2-redefined-competitor-channel-modeling-cuttingpublishing-shift-to-34).
-- **Phase 3 — Assisted cutting.** Automatic clip generation with FFmpeg; evaluate
+  niche — outlier videos, packaging patterns (title/thumbnail), posting strategy and audience
+  demand — to guide PRIMOCUT's editorial decisions. Delivered across six steps: the projects +
+  global-channel foundation, continuous snapshot collection, the deterministic metrics engine,
+  the Competitors UI, the opt-in AI packaging enrichment, and comments (automatic collection +
+  manual synthesis). Channels are supplied by the user (no niche-wide channel discovery).
+  **Out of scope:** anything that depends on private YouTube Analytics (CTR, retention,
+  impressions — unavailable for third-party channels); clip generation/WhisperX (now Phase 3).
+  See the [2026-07-14 decision](#2026-07-14--phase-2-redefined-competitor-channel-modeling-cuttingpublishing-shift-to-34).
+  **Deferred extension point — transcribing competitor outliers:** the pipeline that already
+  exists (`run_stages` → yt-dlp audio → faster-whisper under the Redis GPU lock `primocut:gpu`)
+  would be reused as-is against a `competitor_videos` row, to mine what a winning video actually
+  *says*. Not built: the pipeline is keyed to the `videos` table (the live-report entity), so it
+  needs that split resolved first, and each outlier costs real GPU minutes — it waits for a
+  demand signal from the niche views now shipped.
+- **Phase 3 — Assisted cutting (next).** Automatic clip generation with FFmpeg; evaluate
   **WhisperX** (word-level timestamps + diarization). The `TranscriptionEngine` interface
   exists precisely so WhisperX can be plugged in without touching the rest of the system.
 - **Phase 4 — Publishing.** AI titles/descriptions, vertical format, upload via the YouTube
@@ -750,6 +845,70 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 
 The most important section. **Never overwrite or delete an entry**: a reverted decision gets a
 **new** entry pointing to the reversal. Dates in ISO (`YYYY-MM-DD`).
+
+### 2026-07-15 · Comments: automatic collection, manual synthesis (Phase 2 complete)
+**Type:** technical + product (methodology — guidelines 9 and 10).
+**Decision:** deliver the last Phase 2 promise by splitting comments **along the cost line**, and
+close the phase. The policy itself (collection automatic, synthesis manual) had been stated in
+`PRIMOCUT.md` since the phase was scoped but never recorded here — this entry is also that
+missing record. Key decisions:
+- **Collection is level-triggered, not edge-detected.** The obvious reading of "collect when a
+  video *crosses* 3x" is a rising edge — but guideline 10 stores no score, so there is nothing to
+  diff against, and re-deriving a historical baseline to fake one would be a large amount of
+  machinery for a worse answer. Instead each cycle asks "is it a definitive outlier **now**?"
+  (`definitive_outlier_ids_for_channel`, reusing `_is_definitive_outlier`) and lets
+  `competitor_videos.comments_state` stop the repeat. That is idempotent, self-heals across a
+  missed cycle, and is the same shape as `refresh_syntactic_attributes`. The state lives on the
+  video row, not in a new table: it models a once-per-video operation, exactly like
+  `backfill_state` on the channel row.
+- **The target is the DEFINITIVE outliers**, so a provisional video (< 7 days) waits. It costs a
+  week of latency and buys two things: no quota on a video whose score may still fall back, and a
+  richer comment set — a single collection on a day-old video would capture the thread before it
+  filled. It is also the same set the batch enrichment and the pattern math already use.
+- **The golden rule extended to quotes.** Comments reach the model **indexed** and it returns an
+  `example_index`, never text; `resolve_example` maps it back to the stored comment and
+  **clamps**. Timestamps were protected this way since 2026-07-12 for exactly this reason, and a
+  fabricated audience quote is the same class of lie as a fabricated timestamp — it looks like
+  evidence. Letting the model echo the text would have been one less function and no guarantee.
+- **The synthesis lands in `video_enrichments`, not `video_attributes`.** `metrics.patterns`
+  reports **every boolean** of an attributes row as a packaging pattern; a narrative synthesis in
+  that table would have leaked into the conditional distributions. A second table, with the same
+  `content_hash`/`state`/`error` contract, keeps `ATTR_SOURCES` — and the distributions —
+  untouched. It is the mirror image of the step-5 per-source reasoning: there, honesty meant
+  measuring each source against its own population; here it means not measuring this one at all.
+- **Reuses the enrichment machinery whole.** `comments` is a third `kind` through the same
+  `enqueue_enrichment` → `enrich_videos` → `plan/run/save` path, so it inherits one isolation
+  story, one polling surface and one cache gate; only the store and the prompt differ.
+  **`regenerate` is rejected, not ignored, for the packaging kinds**: they have nothing to
+  re-fetch, so the flag could only mean the caller expected something we would not do.
+- **The aggregation is code, not a second LLM pass** (`request_key` = casefold + strip accents/
+  punctuation), so it is free, auditable and re-tunable **without re-paying**. Ranked by *how
+  many videos asked* rather than raw mentions: four videos asking for a guest is a niche signal,
+  37 mentions on one video is one fandom. **No minimum-occurrence guard**, deliberately — that
+  guard exists because a distribution over a small sample makes a false statistical claim, while
+  this list claims only "N videos' comments asked for this", which is true at N=1; the count is
+  on every row.
+- **Disabled comments are a fact, not a failure.** 403/`commentsDisabled` → the terminal
+  `comments_state="disabled"`, so the cycle stops asking forever; any other error stays
+  retryable.
+**Reason:** the packaging patterns say *how* winning videos are packaged; nothing said what the
+niche's audience is actually asking for — the input that most directly picks the next guest or
+subject. Guideline 9 is what keeps it affordable: the collection is quota (2 units/outlier) and
+the LLM is only ever spent on a video the user pointed at.
+**Rejected alternatives:** edge detection against a stored/derived historical score (machinery,
+and it contradicts guideline 10); collecting on every video (quota on videos nobody will read);
+collecting at the 3x crossing including provisional videos (pays for scores that may fall back,
+and collects a thread that has not filled); the synthesis in `video_attributes` (would fabricate
+packaging patterns out of narrative text); letting the model quote directly (invented evidence);
+an LLM pass to merge the requests across videos (a paid, unauditable version of a `casefold`);
+a minimum-occurrence guard on the request list (suppresses true statements — see above);
+a separate `competitors enrich` command (a second door to `metrics enrich`).
+**Deferred, explicitly:** transcribing competitor outliers — the extension point is recorded in
+the [roadmap](#5-roadmap).
+**Test note:** the API and the LLM are both faked, so the suite still needs no key and no
+network; the cost guard is itself a test (a full cycle over a 10x outlier collects comments and
+writes **no** synthesis row). The UI stays on the documented manual smoke test
+([§2.9](#29-competitors-ui--manual-smoke-test)).
 
 ### 2026-07-15 · Phase 2 AI enrichment: opt-in, hash-cached, measured per source
 **Type:** technical + product (methodology — guidelines 9 and 10).
