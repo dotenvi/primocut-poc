@@ -66,11 +66,30 @@ brackets); **VPH strictly from snapshot deltas** (current = last-24 h delta; nev
 average); **packaging impact** (mean VPH 7 days before vs after a change, filled into
 `packaging_changes.vph_before/after` once the window elapses); **engagement** (likes/comments
 per view) and **cadence** (uploads/week, weekday/hour distribution, duration per format); and
-**per-project conditional distributions** of **syntactic title attributes** (regex/heuristic,
-persisted in `video_attributes`) among outliers vs the population, gated by a
-**minimum-occurrence guard**. The two persisted artifacts (syntactic attributes + packaging
-impact) are written by the snapshot cycle and by `primocut metrics refresh`; the dashboards
-stay pure reads.
+**per-project conditional distributions** of **packaging attributes** (persisted in
+`video_attributes`) among outliers vs the population, gated by a **minimum-occurrence
+guard**. The two free artifacts (syntactic attributes + packaging impact) are written by the
+snapshot cycle and by `primocut metrics refresh`; the dashboards stay pure reads.
+
+**AI packaging enrichment** is in place, and is **opt-in** (guideline 9 — it costs an LLM
+call). A **thumbnail** pass sends the image to a **vision model** under forced tool use (same
+structured-output technique as the topic analysis) and records faces + dominant expression,
+overlaid text + word count + transcription, dominant colors, contrast, arrows/circles and
+confrontation framing; a **title** pass records people named, theme, tone and quoted speech.
+Both are triggered only by hand — the **button on a video detail**, the **"Enrich outlier
+thumbnails/titles"** batch on the project dashboard, `POST /api/channels/{cid}/videos/{vid}/enrich`
+/ `POST /api/projects/{pid}/enrich` `{kind}`, or `primocut metrics enrich`. Results are
+**paid for once**: each row is keyed by a **content hash** (the title string; the thumbnail's
+**image bytes**, reusing the hash the snapshot cycle already tracks), so re-clicking costs
+nothing and a channel in two projects is enriched once. Each row stores the **raw** model
+output plus **boolean facets derived in code**, which is what feeds the conditional
+distributions — measured **per source**, against the population of videos actually analysed
+for it, so an un-enriched video counts as *unknown*, never as "attribute absent". The batch
+targets the **definitive outliers only** (the same set the patterns read), runs on the queue
+with **per-video isolation** (one failure never aborts it) and surfaces the error on the row
+itself. Multi-provider is preserved (Anthropic default); `PRIMOCUT_ENRICH_TITLE_MODEL` /
+`PRIMOCUT_ENRICH_VISION_MODEL` optionally point a pass at a cheaper model.
+**Not yet built:** comment collection + synthesis.
 
 **Phase 2 UI** is in place: a **Competitors** section in the SPA (`#/projects…`), where a
 **project selector** (create/rename/remove — removing detaches channels and says the data is
@@ -85,8 +104,10 @@ outlier/VPH/engagement, syntactic attributes, packaging log, YouTube link). Meth
 are surfaced rather than hidden: a **provisional** pill, an **insufficient data** note, a `—`
 where VPH cannot be computed, a suppressed-pattern message, and — for a channel too fresh to
 score — **"Collecting data — provisional scores from tomorrow."** instead of an empty screen.
-Charts are hand-built (inline SVG / CSS bars); no chart library was added.
-**Not yet built:** AI enrichment (thumbnail/title LLM attributes, comment synthesis).
+Charts are hand-built (inline SVG / CSS bars); no chart library was added. The video detail
+also carries the two **opt-in AI panels** (analyse/re-analyse, a live state while the call
+runs, and the failure message in place of a blank panel); the project dashboard carries the
+batch action and tags each reported pattern with its **source**.
 
 The pipeline runs, in order: **audio (yt-dlp → FFmpeg 16 kHz mono) → chat replay (optional)
 → transcription (faster-whisper `large-v3-turbo`, GPU) → analysis (LLM, macro topics)**.
@@ -302,6 +323,30 @@ brackets, provisional/resurgence/impact/pattern thresholds are all configurable
 (`PRIMOCUT_OUTLIER_*`, `PRIMOCUT_VPH_*`, `PRIMOCUT_RESURGENCE_*`, `PRIMOCUT_PACKAGING_IMPACT_*`,
 `PRIMOCUT_PATTERN_*` — see `.env.example`).
 
+**AI packaging enrichment — opt-in, and it COSTS an LLM call** (guideline 9). It never runs on
+the scheduler nor inside `metrics refresh`; only these do it:
+
+```bash
+# The niche batch: the project's DEFINITIVE outliers (the set the patterns read)
+primocut metrics enrich --project <PID> --kind thumbnail
+primocut metrics enrich --project <PID> --kind title
+
+# A single video
+primocut metrics enrich --video <VID> --kind thumbnail
+```
+
+The CLI runs inline (no worker needed); the UI buttons and the two endpoints
+(`POST /api/channels/{cid}/videos/{vid}/enrich`, `POST /api/projects/{pid}/enrich`, both
+`{kind: thumbnail|title}` → 202) go through the queue, so `primocut worker` must be running.
+Either way the work is **paid for once**: a video is re-analysed only when its content hash
+changes (the title string; the thumbnail's image bytes), and the result is shared by every
+project tracking the channel — re-running a batch reports the untouched ones as *cached*.
+The thumbnail pass needs a **vision-capable** model and a `thumbnail_hash` already collected
+(run a snapshot cycle first). By default both passes use the selected provider's configured
+model; point one at a cheaper model with `PRIMOCUT_ENRICH_TITLE_MODEL` /
+`PRIMOCUT_ENRICH_VISION_MODEL` (a model id is provider-specific — only valid for the provider
+in use).
+
 ### 2.9 Competitors UI — manual smoke test
 
 The Phase 2 UI has no automated coverage (the suite is Python-only), so it is validated by
@@ -322,7 +367,16 @@ backfill), then open `http://127.0.0.1:8000/#/projects`:
    score/band/VPH, patterns, packaging log with the video title + before/after verdict,
    resurgences), the **channel dashboard** (baselines, engagement, cadence, packaging) and a
    **video detail** (snapshot chart, attributes, working *Watch on YouTube*).
-4. **Guard states (the important ones).** A channel too fresh to score must show
+4. **AI enrichment (opt-in — this spends money).** With a provider key set and `primocut worker`
+   running, open a video detail → **✨ Analyse thumbnail with AI** → the panel shows
+   *Analysing the thumbnail…* and settles into the attributes; the button becomes
+   **Re-analyse**. Click it again with the thumbnail unchanged: nothing is recharged (the
+   worker log says `0 enriched, 1 cached`). Same for the title. On the project dashboard,
+   **✨ Enrich outlier thumbnails** reports how many outliers it queued; the patterns table
+   grows AI rows tagged `thumbnail_llm` once enough outliers are enriched to clear the
+   minimum-occurrence guard. To see the failure path, point `ANTHROPIC_API_KEY` at a bad key:
+   the panel must render the error text and the polling must stop.
+5. **Guard states (the important ones).** A channel too fresh to score must show
    **"Collecting data — provisional scores from tomorrow."** instead of an empty dashboard; a
    video under 7 days must carry the amber **provisional** pill; a format with too few peers
    must read **insufficient data**; a video with a single snapshot must show **`—`** for VPH
@@ -364,7 +418,16 @@ engine (synthetic fixtures, no network): **median baseline robust to a viral in 
 **VPH from deltas** (and `None` — never fabricated — with a single snapshot), **resurgence**,
 **packaging before/after** (persisted only once the window elapses), **minimum-occurrence guard
 suppressing a small-sample pattern**, and a **channel shared by two projects yielding identical
-metrics with scoped reports**.
+metrics with scoped reports**. Phase 2 AI enrichment (LLM faked, no key/network):
+**pay-once cache by content hash** (an unchanged hash calls nothing and fetches no bytes; a new
+hash recomputes — both kinds), **sharing across projects**, **per-video failure isolation in a
+batch** (with the error recorded and retried on the next click), **the empty-thumbnail-hash
+refusal**, **the batch targeting definitive outliers only** (a provisional 10x is excluded),
+**AI attributes in the conditional distributions** with the **per-source population** (an
+un-enriched video is *unknown*, not "attribute absent" — the test pins the honest lift of 1.0
+against the fabricated 3.0), **suppression while enrichment is sparse**, the **vision plumbing
+of each provider** (base64 block vs data-URL, forced tool use, model override), and — the cost
+guard — **a full `snapshot_cycle` + `metrics refresh` writing no LLM-sourced row**.
 
 ---
 
@@ -400,10 +463,11 @@ metrics with scoped reports**.
 Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations`, the Phase 2
 foundation `projects, competitor_channels, project_channels, competitor_videos`, the
 collection time series `channel_snapshots, video_snapshots, packaging_changes`, and the metrics
-artifact `video_attributes` (persisted syntactic title features, unique per `(video_id,
-source)`). Outlier scores, VPH, resurgence and pattern distributions are computed on read over
-the snapshots — never stored; the only persisted derived figures are `video_attributes` and
-`packaging_changes.vph_before/after`.
+artifact `video_attributes` (persisted packaging features, unique per `(video_id, source)`:
+`syntactic` = free/deterministic, `title_llm`/`thumbnail_llm` = the opt-in AI enrichment, each
+content-hash gated and carrying its own `state`/`error`). Outlier scores, VPH, resurgence and
+pattern distributions are computed on read over the snapshots — never stored; the only
+persisted derived figures are `video_attributes` and `packaging_changes.vph_before/after`.
 Simple migrations: base schema via `create_all` (v1) + `db/migrations/NNN_*.sql` deltas.
 The runner tolerates a duplicate-column error on `ADD COLUMN`, so column-adding deltas are
 no-ops on fresh databases (where `create_all` already added the column from the model).
@@ -473,7 +537,15 @@ Phase 2 metrics dashboards (computed on read; **pure reads, no writes**):
 |---|---|---|
 | GET | `/api/projects/{pid}/dashboard` | niche outlier ranking, per-project attribute patterns (guarded), packaging with before/after impact, resurgences |
 | GET | `/api/channels/{cid}/dashboard` | per-format baselines, outlier ranking, engagement medians, cadence, resurgences |
-| GET | `/api/channels/{cid}/videos/{vid}` | snapshot series, VPH (current + pairwise), outlier score, engagement, resurgence, syntactic attributes, packaging changes |
+| GET | `/api/channels/{cid}/videos/{vid}` | snapshot series, VPH (current + pairwise), outlier score, engagement, resurgence, attributes per source (syntactic + the AI ones with their state/error), packaging changes |
+
+Phase 2 AI enrichment (**opt-in — costs an LLM call**; enqueues only, never calls the LLM
+inside the request):
+
+| Method | Route | Action |
+|---|---|---|
+| POST | `/api/channels/{cid}/videos/{vid}/enrich` `{kind}` | enrich one video's `thumbnail` or `title` (202; 400 on an unknown kind) |
+| POST | `/api/projects/{pid}/enrich` `{kind}` | enrich the project's **definitive outliers** (202; returns how many were queued) |
 
 ### Golden rule — timestamps are never invented
 
@@ -496,9 +568,15 @@ time. This holds in both the CLI and the web app.
 - Cross-cutting resilience (retry/backoff/classification): `src/primocut/resilience.py`
 - YouTube Data API v3 client (quota accounting, resolution, thumbnails): `src/primocut/youtube/`
 - Metrics engine (pure core + persistence + dashboards): `src/primocut/metrics/`
-  (`core.py` = DB-free methodology; `attributes.py`/`impact.py` = the persisted artifacts;
-  `patterns.py` = per-project distributions; `service.py` = dashboard payloads). HTTP routers:
-  `api/metrics.py` (channel/video) + the project dashboard in `api/projects.py`.
+  (`core.py` = DB-free methodology; `attributes.py`/`impact.py` = the free persisted artifacts;
+  `enrichment.py` = the opt-in AI attributes (hash gate, derived facets); `patterns.py` =
+  per-project distributions; `service.py` = dashboard payloads + the batch target). HTTP
+  routers: `api/metrics.py` (channel/video + single-video enrich) + the project dashboard and
+  batch enrich in `api/projects.py`.
+- AI enrichment (tool schemas + job): `src/primocut/analysis/enrichment_prompts.py`,
+  `src/primocut/worker/enrich_jobs.py` (per-video isolation), enqueued by
+  `worker/queue.py:enqueue_enrichment`. Vision (base64/data-URL blocks) and the per-call model
+  override live in `analysis/llm.py`, behind the same `SelectionLLM` protocol.
 - Competitor channel registration/backfill (queue + job): `src/primocut/worker/channels.py`,
   `src/primocut/worker/channel_jobs.py`
 - Snapshot collection (cycle job + scheduler): `src/primocut/worker/snapshot_jobs.py`,
@@ -556,6 +634,9 @@ and covered by tests**.
 | **Snapshot cycle** | Channel deactivated (orphaned) | Excluded from selection — collection stops until the channel is re-linked (`active=true`) |
 | **Snapshot cycle** | Metrics-artifact persistence fails (attributes/impact) | Isolated in its own step: logged and skipped, **never affecting the collected snapshots** of the cycle |
 | **Metrics dashboards** | Too few videos / a single snapshot | **Degrade, not crash**: an outlier score becomes `insufficient_data`, a VPH becomes `None`, a small-sample pattern is suppressed — the dashboard still renders |
+| **AI enrichment** | One video's LLM/thumbnail call fails | **Per-video isolation**: logged, the row is marked `state="error"` with the message (which the UI renders in place of a blank panel), and the batch continues. The content hash is cleared so the next explicit click retries only that video |
+| **AI enrichment** | The thumbnail was never byte-hashed (`thumbnail_hash=""`) | Refuses without calling the LLM: with no cache key every click would recharge. Surfaces as the row's error, asking for a snapshot cycle first |
+| **AI enrichment** | Model returns an off-schema/partial payload | The derived facets read every field defensively (missing → the neutral value), so a sloppy response degrades the facets instead of breaking the row |
 
 ### 4.2 Cache / resume (pay-once)
 
@@ -634,7 +715,8 @@ The analysis is provider-agnostic (`SelectionLLM` interface). Automatic selectio
 | `PRIMOCUT_VPH_CURRENT_WINDOW_HOURS` | Trailing window for the "current" VPH (default 24) |
 | `PRIMOCUT_RESURGENCE_K` / `PRIMOCUT_RESURGENCE_MIN_AGE_DAYS` / `PRIMOCUT_RESURGENCE_BASELINE_DAYS` / `PRIMOCUT_RESURGENCE_MIN_VPH` | Resurgence detection |
 | `PRIMOCUT_PACKAGING_IMPACT_WINDOW_DAYS` | Before/after window for packaging impact (default 7) |
-| `PRIMOCUT_PATTERN_MIN_OCCURRENCE` / `PRIMOCUT_PATTERN_OUTLIER_BRACKET` | Pattern minimum-occurrence guard + outlier threshold |
+| `PRIMOCUT_PATTERN_MIN_OCCURRENCE` / `PRIMOCUT_PATTERN_OUTLIER_BRACKET` | Pattern minimum-occurrence guard + outlier threshold (the latter is also the batch-enrichment target) |
+| `PRIMOCUT_ENRICH_TITLE_MODEL` / `PRIMOCUT_ENRICH_VISION_MODEL` | Model override for the opt-in enrichment passes. **Empty (default) = the selected provider's configured model**; a model id is provider-specific, and the vision one must support image input |
 
 ---
 
@@ -668,6 +750,58 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 
 The most important section. **Never overwrite or delete an entry**: a reverted decision gets a
 **new** entry pointing to the reversal. Dates in ISO (`YYYY-MM-DD`).
+
+### 2026-07-15 · Phase 2 AI enrichment: opt-in, hash-cached, measured per source
+**Type:** technical + product (methodology — guidelines 9 and 10).
+**Decision:** add the thumbnail (vision) and title (semantic) packaging attributes promised in
+`PRIMOCUT.md`, reusing the analysis stack rather than growing a second one. Key decisions:
+- **The tool schema is the contract.** Both passes force a tool call (the topic analysis's
+  technique) with the schema written in **Anthropic shape**, because `OpenAILLM.select()`
+  already converts that shape to OpenAI's function format — so multi-provider survives with
+  **zero per-provider branching** in the enrichment, and OpenRouter inherits it for free.
+  Vision needed exactly one seam: an optional `images` argument on `select()`, packed as a
+  base64 `image` block (Anthropic) or a `data:` URL `image_url` block (OpenAI-compatible). A
+  `model` override rides along so a pass can point at a cheaper model.
+- **The model observes; the code decides.** Rows store the **raw** output plus **boolean
+  facets derived in code** (`thumb_multiple_faces` = ≥2 faces, `thumb_text_heavy` = ≥4 words,
+  one-hot expression/tone/colors). `patterns.py` only counts booleans, so the facets are what
+  reaches the distributions — and every threshold stays auditable and re-tunable **without
+  re-paying** for the analysis. Asking the model for the booleans directly would have baked
+  the thresholds into a prompt and into the cache.
+- **Each source is measured against its own population.** `conditional_patterns` is called
+  once per source with the population restricted to the videos analysed for it. Merging the
+  sources into one dict per video would have been a **methodology bug**: an un-enriched video
+  lacks the AI keys, `a.get(attr) is True` reads False, and it would count as *"attribute
+  absent"* rather than *"unknown"* — deflating the population rate and **fabricating lift**
+  (the test pins the honest 1.0 against the fabricated 3.0). The existing minimum-occurrence
+  guard then does the rest on its own: while enrichment is sparse, no AI pattern is claimed.
+- **Pay-once, keyed by content hash, shared across projects.** The title reuses
+  `title_content_hash`; the thumbnail reuses **`competitor_videos.thumbnail_hash`** — the byte
+  hash the snapshot cycle already maintains and change-tracks — so checking the cache costs no
+  network, and bytes are fetched only once the hash says the work is due. An **empty** hash is
+  refused rather than analysed: with no cache key every click would recharge.
+- **Everything goes through the queue** (guideline 7), single video and batch alike: one job
+  function over a list of one vs many means one code path, one isolation story and one thing
+  to poll. The **batch targets the definitive outliers only** — the same set the patterns
+  read, reusing `_is_definitive_outlier`; paying for a video the distributions never read is
+  waste, and a provisional score may still fall back to normal (the content hash would not
+  protect against that — the score changes, the bytes don't).
+- **State lives on the attributes row** (`state`/`error`, migration `005`), not in a new
+  table: the row is already unique per `(video_id, source)`, and this is the same shape as
+  `backfill_state`, which the UI already polls. A failure leaves a visible message and an
+  empty hash, so the next click retries **only** that video.
+**Reason:** the pattern report could say *"outliers use ALL CAPS 2.1× more"* but not *"outliers
+show a shocked face 3× more"* — the thing that actually drives editorial decisions. Guideline 9
+is what keeps it affordable, and the per-source population is what keeps it honest.
+**Rejected alternatives:** asking the LLM for booleans (bakes thresholds into the cache);
+merging sources into one population (fabricates lift, see above); a synchronous single-video
+endpoint (fewer moving parts, but two code paths and a second failure story for one saved
+poll); a separate progress table (a batch is transient — the same reasoning that rejected one
+for snapshot cycles); pre-filling `ENRICH_TITLE_MODEL=claude-haiku-4-5` (a model id is
+provider-specific — it would break the default the moment the provider changed).
+**Test note:** the LLM is faked throughout, so the suite still needs no key and no network; the
+cost guard is itself a test (a full `snapshot_cycle` + `metrics refresh` must write no
+LLM-sourced row). The UI stays on the documented manual smoke test ([§2.9](#29-competitors-ui--manual-smoke-test)).
 
 ### 2026-07-15 · Phase 2 UI: route-encoded project selection, guards shown not hidden
 **Type:** technical + product.
