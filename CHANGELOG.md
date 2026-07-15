@@ -10,6 +10,23 @@ unstable: breaking changes may land in any minor release.
 
 ## [Unreleased]
 
+### Changed
+
+- **The dashboards never blend Shorts with long-form** — Shorts and long-form
+  monetise differently, target different audiences and are different formats, so
+  a figure computed across both describes neither. The outlier score already used
+  per-format baselines, but the **engagement medians were computed over every
+  video mixed**, and the outlier/pattern/resurgence populations were reported as
+  one list. Every one of them is now split by format, and the UI picks one with a
+  Long-form/Shorts tab.
+- **BREAKING (Web API)** — in `GET /api/channels/{cid}/dashboard`, `engagement`,
+  `outliers` and `resurgences` are now objects keyed `"long"`/`"short"` instead of
+  a flat object/list; in `GET /api/projects/{pid}/dashboard`, the same applies to
+  `outliers`, `patterns` and `resurgences`.
+- **Patterns clear the minimum-occurrence guard per format**, so a format with too
+  few definitive outliers now reports no pattern instead of borrowing the other
+  format's support.
+
 ### Fixed
 
 - **Shorts longer than 60s are no longer classified as long-form** — the

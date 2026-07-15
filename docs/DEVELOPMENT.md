@@ -68,7 +68,12 @@ average); **packaging impact** (mean VPH 7 days before vs after a change, filled
 per view) and **cadence** (uploads/week, weekday/hour distribution, duration per format); and
 **per-project conditional distributions** of **packaging attributes** (persisted in
 `video_attributes`) among outliers vs the population, gated by a **minimum-occurrence
-guard**. The two free artifacts (syntactic attributes + packaging impact) are written by the
+guard**. **Shorts and long-form are never blended**: they monetise differently, target
+different audiences and are different formats, so every population a dashboard reports —
+baselines, outlier rankings, engagement medians, patterns, resurgences — is keyed by
+`"long"`/`"short"` (`service.FORMATS`), and the UI picks one with a format tab. Each format
+clears the sample guards on its own, so a thin format reports nothing rather than borrowing
+the other's support. The two free artifacts (syntactic attributes + packaging impact) are written by the
 snapshot cycle and by `primocut metrics refresh`; the dashboards stay pure reads.
 
 **AI packaging enrichment** is in place, and is **opt-in** (guideline 9 — it costs an LLM
@@ -118,7 +123,9 @@ so it stops when terminal — and detach) and **Dashboard**, the niche view (out
 score/band/**VPH**, per-project attribute patterns, packaging log with a before/after verdict,
 resurgence alerts). Drilling down: a **channel dashboard** (baselines, engagement, cadence
 histograms, outliers, packaging, resurgences) and a **video detail** (snapshot time series,
-outlier/VPH/engagement, syntactic attributes, packaging log, YouTube link). Methodology guards
+outlier/VPH/engagement, syntactic attributes, packaging log, YouTube link). Every section that
+reports a population is scoped to one format by a **`FormatTabs`** control (Long-form/Shorts,
+with counts) — never a blended figure. Methodology guards
 are surfaced rather than hidden: a **provisional** pill, an **insufficient data** note, a `—`
 where VPH cannot be computed, a suppressed-pattern message, and — for a channel too fresh to
 score — **"Collecting data — provisional scores from tomorrow."** instead of an empty screen.
@@ -616,8 +623,8 @@ Phase 2 metrics dashboards (computed on read; **pure reads, no writes**):
 
 | Method | Route | Action |
 |---|---|---|
-| GET | `/api/projects/{pid}/dashboard` | niche outlier ranking, per-project attribute patterns (guarded), aggregated audience requests, packaging with before/after impact, resurgences |
-| GET | `/api/channels/{cid}/dashboard` | per-format baselines, outlier ranking, engagement medians, cadence, resurgences |
+| GET | `/api/projects/{pid}/dashboard` | niche outlier ranking, per-project attribute patterns (guarded), aggregated audience requests, packaging with before/after impact, resurgences — `outliers`/`patterns`/`resurgences` keyed `long`/`short` |
+| GET | `/api/channels/{cid}/dashboard` | baselines, outlier ranking, engagement medians, cadence, resurgences — `baselines`/`outliers`/`engagement`/`resurgences` keyed `long`/`short` |
 | GET | `/api/channels/{cid}/videos/{vid}` | snapshot series, VPH (current + pairwise), outlier score, engagement, resurgence, attributes per source (syntactic + the AI ones with their state/error), collected-comment count/state, the comment synthesis (or null), packaging changes |
 
 Phase 2 AI enrichment (**opt-in — costs an LLM call**; enqueues only, never calls the LLM
