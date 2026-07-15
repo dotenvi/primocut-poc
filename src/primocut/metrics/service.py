@@ -54,6 +54,21 @@ def _format(is_short: bool) -> str:
     return "short" if is_short else "long"
 
 
+# Shorts and long-form are different products: different monetisation, different
+# audience, different format. Every population a dashboard reports is therefore
+# split by format — a figure blended across both describes neither. `FORMATS`
+# fixes the key order so a payload is stable and a caller can iterate it.
+FORMATS: tuple[tuple[str, bool], ...] = (("long", False), ("short", True))
+
+
+def _by_format(items, is_short_of) -> dict[str, list]:
+    """Split `items` into the per-format lists the dashboards report."""
+    return {
+        fmt: [it for it in items if is_short_of(it) == is_short]
+        for fmt, is_short in FORMATS
+    }
+
+
 # ------------------------- channel-level outlier scoring -------------------------
 
 
@@ -73,7 +88,7 @@ def _channel_scores(
     window_cut = now - timedelta(days=settings.outlier_window_days)
 
     baselines: dict[str, core.Baseline | None] = {}
-    for fmt, is_short in (("long", False), ("short", True)):
+    for fmt, is_short in FORMATS:
         peers = [
             v for v in videos
             if v.is_short == is_short
@@ -298,36 +313,50 @@ def channel_dashboard(session, channel_id, *, settings=None, now=None) -> dict |
     videos = crepo.list_channel_videos(session, channel_id)
     snap = crepo.latest_channel_snapshot(session, channel_id)
 
-    # Outlier ranking (>= the first bracket), most-viral first.
-    outliers = sorted(
-        (sc for sc in scored.values() if sc.score.bracket is not None),
-        key=lambda sc: sc.score.score, reverse=True,
+    # Outlier ranking (>= the first bracket), most-viral first, per format.
+    outliers = _by_format(
+        sorted(
+            (sc for sc in scored.values() if sc.score.bracket is not None),
+            key=lambda sc: sc.score.score, reverse=True,
+        ),
+        lambda sc: sc.is_short,
     )
 
-    # Engagement medians across the channel's videos that have a snapshot.
-    like_rates, comment_rates = [], []
-    for v in videos:
-        latest = crepo.latest_video_snapshot(session, v.video_id)
-        if latest is None:
-            continue
-        e = core.engagement_rates(latest.views, latest.likes, latest.comments)
-        if e.like_rate is not None:
-            like_rates.append(e.like_rate)
-        if e.comment_rate is not None:
-            comment_rates.append(e.comment_rate)
+    # Engagement medians over the channel's videos that have a snapshot, per
+    # format: a Short's like rate is structurally unlike a long-form video's.
+    engagement = {}
+    for fmt, videos_of in _by_format(videos, lambda v: v.is_short).items():
+        like_rates, comment_rates = [], []
+        for v in videos_of:
+            latest = crepo.latest_video_snapshot(session, v.video_id)
+            if latest is None:
+                continue
+            e = core.engagement_rates(latest.views, latest.likes, latest.comments)
+            if e.like_rate is not None:
+                like_rates.append(e.like_rate)
+            if e.comment_rate is not None:
+                comment_rates.append(e.comment_rate)
+        engagement[fmt] = {
+            "like_rate_median": core.median(like_rates),
+            "comment_rate_median": core.median(comment_rates),
+        }
 
     cad = core.cadence(
         [core.VideoMeta(v.published_at, v.is_short, v.duration_s) for v in videos], now=now
     )
 
-    resurgences = []
+    resurgent = []
     for v in videos:
         res = _resurgence_for(session, v, settings=settings, now=now)
         if res.is_resurgent:
-            resurgences.append({
+            resurgent.append((v.is_short, {
                 "video_id": v.video_id, "title": v.title, "ratio": res.ratio,
                 "current_vph": res.current_vph, "recent_avg_vph": res.recent_avg_vph,
-            })
+            }))
+    resurgences = {
+        fmt: [payload for _, payload in rows]
+        for fmt, rows in _by_format(resurgent, lambda r: r[0]).items()
+    }
 
     # Packaging log with its persisted before/after impact (same shape as the
     # project dashboard, scoped to this channel).
@@ -355,11 +384,10 @@ def channel_dashboard(session, channel_id, *, settings=None, now=None) -> dict |
             fmt: ({"median": b.median, "sample": b.sample_size} if b else None)
             for fmt, b in baselines.items()
         },
-        "outliers": [_outlier_payload(sc) for sc in outliers],
-        "engagement": {
-            "like_rate_median": core.median(like_rates),
-            "comment_rate_median": core.median(comment_rates),
+        "outliers": {
+            fmt: [_outlier_payload(sc) for sc in scs] for fmt, scs in outliers.items()
         },
+        "engagement": engagement,
         "cadence": {
             "uploads_per_week": cad.uploads_per_week,
             "by_weekday": {str(k): v for k, v in sorted(cad.by_weekday.items())},
@@ -442,15 +470,24 @@ def project_dashboard(session, project_id, *, settings=None, now=None) -> dict |
         scored, _ = _channel_scores(session, c.channel_id, settings=settings, now=now)
         all_scored.extend(scored.values())
 
-    ranked = sorted(
-        (sc for sc in all_scored if sc.score.bracket is not None),
-        key=lambda sc: sc.score.score, reverse=True,
+    ranked = _by_format(
+        sorted(
+            (sc for sc in all_scored if sc.score.bracket is not None),
+            key=lambda sc: sc.score.score, reverse=True,
+        ),
+        lambda sc: sc.is_short,
     )
 
     # Conditional distributions, per source: population = the project videos that
     # have a row for that source; outliers = the definitive (non-provisional,
-    # >= threshold) subset of them.
-    patterns = _patterns_for(session, all_scored, settings=settings)
+    # >= threshold) subset of them. Computed per format, so an attribute's lift
+    # measures it against same-format peers and never against the gap between
+    # Shorts and long-form. Each format needs its own `pattern_min_occurrence`
+    # support, so a thin format simply reports nothing.
+    patterns = {
+        fmt: _patterns_for(session, scs, settings=settings)
+        for fmt, scs in _by_format(all_scored, lambda sc: sc.is_short).items()
+    }
 
     # What this niche's audience asked for, merged across the project's syntheses.
     # Scoped to the project (a request in another niche never leaks in) and
@@ -479,15 +516,19 @@ def project_dashboard(session, project_id, *, settings=None, now=None) -> dict |
             })
 
     # Resurgences across the project's channels.
-    resurgences = []
+    resurgent = []
     for c in channels:
         for v in crepo.list_channel_videos(session, c.channel_id):
             res = _resurgence_for(session, v, settings=settings, now=now)
             if res.is_resurgent:
-                resurgences.append({
+                resurgent.append((v.is_short, {
                     "video_id": v.video_id, "channel_id": c.channel_id,
                     "title": v.title, "ratio": res.ratio, "current_vph": res.current_vph,
-                })
+                }))
+    resurgences = {
+        fmt: [payload for _, payload in rows]
+        for fmt, rows in _by_format(resurgent, lambda r: r[0]).items()
+    }
 
     return {
         "project": {"id": project.id, "name": project.name},
@@ -496,14 +537,17 @@ def project_dashboard(session, project_id, *, settings=None, now=None) -> dict |
              "subscribers": (s.subscribers if (s := crepo.latest_channel_snapshot(session, c.channel_id)) else None)}
             for c in channels
         ],
-        "outliers": [
-            _outlier_payload(
-                sc, with_channel=True,
-                vph=core.current_vph(_snaps(session, sc.video_id),
-                                     window_hours=settings.vph_current_window_hours),
-            ) | {"channel_title": channel_title.get(sc.channel_id, "")}
-            for sc in ranked
-        ],
+        "outliers": {
+            fmt: [
+                _outlier_payload(
+                    sc, with_channel=True,
+                    vph=core.current_vph(_snaps(session, sc.video_id),
+                                         window_hours=settings.vph_current_window_hours),
+                ) | {"channel_title": channel_title.get(sc.channel_id, "")}
+                for sc in scs
+            ]
+            for fmt, scs in ranked.items()
+        },
         "patterns": patterns,
         "audience_requests": audience_requests,
         "packaging": packaging,
