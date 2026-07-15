@@ -291,6 +291,43 @@ def test_backfill_collects_120_with_is_short_and_hash(tmp_path):
         assert all(v.thumbnail_hash for v in vids)  # hash computed from bytes
 
 
+def test_backfill_flags_shorts_up_to_three_minutes(tmp_path):
+    # YouTube has allowed Shorts of up to 3 minutes since October 2024, so the
+    # duration heuristic must not cut off at the old 60s limit.
+    db = _db(tmp_path)
+    with db.session() as s:
+        crepo.upsert_channel(s, channel_id="UCchan0000000000000000",
+                             uploads_playlist_id="UUchan")
+    durations = [60, 63, 180, 181]
+    videos = [
+        VideoInfo(
+            video_id=f"dur{d:03d}",
+            title=f"V{d}",
+            published_at=None,
+            duration_s=d,
+            thumbnail_url=f"https://i.ytimg.com/vi/dur{d:03d}/hq.jpg",
+            view_count=1,
+            like_count=1,
+            comment_count=1,
+        )
+        for d in durations
+    ]
+    client = FakeYouTube(channel=_channel_info(), videos=videos)
+
+    backfill_channel(
+        "UCchan0000000000000000", settings=_settings(tmp_path), database=db,
+        client=client, thumbnail_fetcher=_fake_thumb,
+    )
+
+    with db.session() as s:
+        by_id = {v.video_id: v for v in
+                 crepo.list_channel_videos(s, "UCchan0000000000000000")}
+    assert by_id["dur060"].is_short is True
+    assert by_id["dur063"].is_short is True  # was misclassified under the 60s cap
+    assert by_id["dur180"].is_short is True  # the boundary is inclusive
+    assert by_id["dur181"].is_short is False
+
+
 def test_backfill_quota_accounting(tmp_path):
     db = _db(tmp_path)
     with db.session() as s:
