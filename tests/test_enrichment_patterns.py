@@ -70,8 +70,9 @@ def _seed_project(db, *, n_outliers=20, n_baseline=40):
         return proj.id
 
 
-def _pattern(dash, attribute):
-    return next((p for p in dash["patterns"] if p["attribute"] == attribute), None)
+def _pattern(dash, attribute, fmt="long"):
+    # Patterns are reported per format; every fixture here seeds long-form.
+    return next((p for p in dash["patterns"][fmt] if p["attribute"] == attribute), None)
 
 
 # ------------------------- unit: the source tag -------------------------

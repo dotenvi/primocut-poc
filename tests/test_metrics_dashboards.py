@@ -79,8 +79,48 @@ def test_channel_dashboard_ranks_outliers_and_separates_formats(tmp_path):
 
     assert data["baselines"]["long"]["median"] == 1000
     assert data["baselines"]["short"]["median"] == 500  # separate baseline
-    top = data["outliers"][0]
+    top = data["outliers"]["long"][0]
     assert top["video_id"] == "viral" and top["bracket"] == "10x" and top["score"] == 10.0
+
+
+def test_channel_dashboard_segregates_engagement_by_format(tmp_path):
+    # Shorts and long-form monetise, target and behave differently, so a single
+    # median across both describes neither. 12 long videos at a 4% like rate and
+    # 12 Shorts at 10% must be reported apart, never blended into ~7%.
+    db = _db(tmp_path)
+    _channel(db, "UCmix")
+    for i in range(12):
+        _video(db, "UCmix", f"long{i}", views=1000, likes=40, comments=10,
+               is_short=False, days_ago=20 + i)
+    for i in range(12):
+        _video(db, "UCmix", f"short{i}", views=1000, likes=100, comments=5,
+               is_short=True, days_ago=20 + i)
+
+    with db.session() as s:
+        data = service.channel_dashboard(s, "UCmix", settings=SETTINGS, now=NOW)
+
+    assert data["engagement"]["long"]["like_rate_median"] == 0.04
+    assert data["engagement"]["short"]["like_rate_median"] == 0.10
+    assert data["engagement"]["long"]["comment_rate_median"] == 0.01
+    assert data["engagement"]["short"]["comment_rate_median"] == 0.005
+
+
+def test_channel_dashboard_segregates_outliers_by_format(tmp_path):
+    db = _db(tmp_path)
+    _seed_baseline_channel(db, "UCsplit", base_views=1000, count=12, is_short=False)
+    _video(db, "UCsplit", "viral_long", views=10_000, is_short=False, days_ago=25)
+    for i in range(12):
+        _video(db, "UCsplit", f"short{i}", views=500, is_short=True, days_ago=10 + i)
+    _video(db, "UCsplit", "viral_short", views=5_000, is_short=True, days_ago=25)
+
+    with db.session() as s:
+        data = service.channel_dashboard(s, "UCsplit", settings=SETTINGS, now=NOW)
+
+    assert [o["video_id"] for o in data["outliers"]["long"]] == ["viral_long"]
+    assert [o["video_id"] for o in data["outliers"]["short"]] == ["viral_short"]
+    # Each is scored against its own format's baseline: 10000/1000 and 5000/500.
+    assert data["outliers"]["long"][0]["score"] == 10.0
+    assert data["outliers"]["short"][0]["score"] == 10.0
 
 
 def test_channel_dashboard_404(tmp_path):
@@ -149,17 +189,36 @@ def test_shared_channel_identical_metrics_scoped_reports(tmp_path):
         dash_a = service.project_dashboard(s, pa, settings=SETTINGS, now=NOW)
         dash_b = service.project_dashboard(s, pb, settings=SETTINGS, now=NOW)
 
-    ids_a = {o["video_id"] for o in dash_a["outliers"]}
-    ids_b = {o["video_id"] for o in dash_b["outliers"]}
+    ids_a = {o["video_id"] for o in dash_a["outliers"]["long"]}
+    ids_b = {o["video_id"] for o in dash_b["outliers"]["long"]}
     # The shared viral appears in BOTH; the exclusive ones stay scoped.
     assert "viral" in ids_a and "viral" in ids_b
     assert "viralA" in ids_a and "viralA" not in ids_b
     assert "viralB" in ids_b and "viralB" not in ids_a
 
     # The shared video's score is identical across the two project reports.
-    sa = next(o for o in dash_a["outliers"] if o["video_id"] == "viral")
-    sb = next(o for o in dash_b["outliers"] if o["video_id"] == "viral")
+    sa = next(o for o in dash_a["outliers"]["long"] if o["video_id"] == "viral")
+    sb = next(o for o in dash_b["outliers"]["long"] if o["video_id"] == "viral")
     assert sa["score"] == sb["score"] == 10.0
+
+
+def test_project_dashboard_segregates_outliers_by_format(tmp_path):
+    db = _db(tmp_path)
+    _seed_baseline_channel(db, "UCpx", base_views=1000, count=12, is_short=False)
+    _video(db, "UCpx", "viral_long", views=10_000, is_short=False, days_ago=25)
+    for i in range(12):
+        _video(db, "UCpx", f"s{i}", views=500, is_short=True, days_ago=10 + i)
+    _video(db, "UCpx", "viral_short", views=5_000, is_short=True, days_ago=25)
+    with db.session() as s:
+        proj = crepo.create_project(s, "P")
+        crepo.link_channel(s, proj.id, "UCpx")
+        pid = proj.id
+
+    with db.session() as s:
+        dash = service.project_dashboard(s, pid, settings=SETTINGS, now=NOW)
+
+    assert [o["video_id"] for o in dash["outliers"]["long"]] == ["viral_long"]
+    assert [o["video_id"] for o in dash["outliers"]["short"]] == ["viral_short"]
 
 
 def test_project_dashboard_404(tmp_path):
@@ -192,6 +251,6 @@ def test_project_dashboard_pattern_guard(tmp_path):
     with db.session() as s:
         dash = service.project_dashboard(s, pid, settings=SETTINGS, now=NOW)
 
-    q = next((p for p in dash["patterns"] if p["attribute"] == "has_question"), None)
+    q = next((p for p in dash["patterns"]["long"] if p["attribute"] == "has_question"), None)
     assert q is not None and q["outlier_occurrences"] >= 15
     assert q["lift"] is not None and q["lift"] > 1.0
