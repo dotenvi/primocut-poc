@@ -143,3 +143,108 @@ TITLE_TOOL = {
         "required": ["person_names", "topic", "tone", "quoted_speech"],
     },
 }
+
+# ------------------------- comment synthesis (opt-in) -------------------------
+#
+# The golden rule, applied to quotes: the comments reach the model INDEXED and it
+# returns only `example_index`, never comment text. `metrics.comments` resolves
+# each index back to the stored comment and clamps it, so the model cannot invent
+# words the audience never wrote — exactly how `resolve_span` protects timestamps.
+
+COMMENT_SYNTHESIS_SYSTEM = (
+    "You read the top comments of a YouTube video for a clip editor studying the "
+    "demand in a niche. Report only what the comments actually say. A request "
+    "counts only when a comment explicitly asks for it — never infer a wish from "
+    "enthusiasm, and never turn a compliment into a request. The comments are "
+    "usually in PT-BR: keep themes and requested names in the comments' own "
+    "language. Quote nothing: to point at a comment, give its index [i]. If there "
+    "are no requests, return an empty list rather than a plausible-looking one."
+)
+
+COMMENT_SYNTHESIS_TOOL = {
+    "name": "record_comment_synthesis",
+    "description": "Record what a YouTube video's top comments are saying.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "themes": {
+                "type": "array",
+                "maxItems": 8,
+                "description": "Recurring subjects in the comments, most discussed first.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "theme": {
+                            "type": "string",
+                            "description": (
+                                "The recurring subject, in the comments' own language."
+                            ),
+                        },
+                        "mentions": {
+                            "type": "integer",
+                            "description": "How many of the supplied comments express it.",
+                        },
+                        "example_index": {
+                            "type": "integer",
+                            "description": (
+                                "The index [i] of one supplied comment that expresses "
+                                "it. Never write the comment's text."
+                            ),
+                        },
+                    },
+                    "required": ["theme", "mentions", "example_index"],
+                },
+            },
+            "requests": {
+                "type": "array",
+                "maxItems": 10,
+                "description": (
+                    "Things the audience explicitly asks for. Only what a comment "
+                    "actually asks for — never an inferred wish."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": ["guest", "topic", "format", "other"],
+                            "description": (
+                                "guest = a person to bring on, topic = a subject to "
+                                "cover, format = how to make it (length, editing, "
+                                "series), other = anything else asked for."
+                            ),
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": (
+                                "The thing asked for, named as the audience names it."
+                            ),
+                        },
+                        "mentions": {
+                            "type": "integer",
+                            "description": "How many of the supplied comments ask for it.",
+                        },
+                        "example_index": {
+                            "type": "integer",
+                            "description": (
+                                "The index [i] of one supplied comment asking for it. "
+                                "Never write the comment's text."
+                            ),
+                        },
+                    },
+                    "required": ["type", "value", "mentions", "example_index"],
+                },
+            },
+            "sentiment": {
+                "type": "string",
+                "enum": ["positive", "mixed", "negative", "neutral"],
+                "description": "The overall reaction across the supplied comments.",
+            },
+            "sentiment_note": {
+                "type": "string",
+                "description": "One short sentence on the overall reaction.",
+            },
+        },
+        "required": ["themes", "requests", "sentiment", "sentiment_note"],
+    },
+}

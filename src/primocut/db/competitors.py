@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -23,6 +23,8 @@ from .models import (
     ProjectChannelRow,
     ProjectRow,
     VideoAttributesRow,
+    VideoCommentRow,
+    VideoEnrichmentRow,
     VideoSnapshotRow,
 )
 
@@ -535,3 +537,157 @@ def list_video_attributes(
         .where(VideoAttributesRow.video_id.in_(video_ids))
     ).scalars()
     return {r.video_id: r for r in rows}
+
+
+# ------------------------- Video comments (collected automatically) -------------------------
+
+
+def list_video_comments(s: Session, video_id: str) -> list[VideoCommentRow]:
+    """A video's collected comments, most-liked first — the order the synthesis
+    indexes them in, so a resolved quote is stable across runs."""
+    return list(
+        s.execute(
+            select(VideoCommentRow)
+            .where(VideoCommentRow.video_id == video_id)
+            .order_by(VideoCommentRow.like_count.desc(), VideoCommentRow.comment_id)
+        ).scalars()
+    )
+
+
+def count_video_comments(s: Session, video_id: str) -> int:
+    return int(
+        s.execute(
+            select(func.count())
+            .select_from(VideoCommentRow)
+            .where(VideoCommentRow.video_id == video_id)
+        ).scalar_one()
+    )
+
+
+def replace_video_comments(s: Session, video_id: str, comments, *, fetched_at: datetime) -> int:
+    """Store a freshly collected comment set, dropping whatever was there.
+
+    A replace (rather than a merge) is what makes an explicit regeneration honest:
+    the stored set is always exactly what the API returned on the last collection,
+    which is also what the synthesis's content hash is computed over.
+    """
+    s.execute(delete(VideoCommentRow).where(VideoCommentRow.video_id == video_id))
+    stored = 0
+    seen: set[str] = set()
+    for c in comments:
+        # Paging is not a snapshot: a comment posted mid-fetch can shift the
+        # relevance order and re-emit one we already have. Dropping the repeat
+        # beats letting it trip the (video_id, comment_id) unique index.
+        if c.comment_id in seen:
+            continue
+        seen.add(c.comment_id)
+        s.add(
+            VideoCommentRow(
+                video_id=video_id,
+                comment_id=c.comment_id,
+                text=c.text,
+                like_count=c.like_count,
+                author=c.author,
+                fetched_at=fetched_at,
+            )
+        )
+        stored += 1
+    s.flush()
+    return stored
+
+
+def set_video_comments_state(
+    s: Session,
+    video_id: str,
+    *,
+    state: str,
+    error: str = "",
+    fetched_at: datetime | None = None,
+) -> None:
+    """Record the outcome of a collection attempt on the video row."""
+    row = s.get(CompetitorVideoRow, video_id)
+    if row is None:
+        return
+    row.comments_state = state
+    row.comments_error = error
+    if fetched_at is not None:
+        row.comments_fetched_at = fetched_at
+
+
+# ------------------------- Video enrichments (opt-in LLM syntheses) -------------------------
+
+
+def get_video_enrichment(s: Session, video_id: str, kind: str) -> VideoEnrichmentRow | None:
+    return s.execute(
+        select(VideoEnrichmentRow)
+        .where(VideoEnrichmentRow.video_id == video_id)
+        .where(VideoEnrichmentRow.kind == kind)
+    ).scalars().first()
+
+
+def upsert_video_enrichment(
+    s: Session,
+    *,
+    video_id: str,
+    kind: str,
+    payload: dict,
+    content_hash: str,
+    state: str = "done",
+    error: str = "",
+) -> VideoEnrichmentRow:
+    row = get_video_enrichment(s, video_id, kind)
+    if row is None:
+        row = VideoEnrichmentRow(video_id=video_id, kind=kind)
+        s.add(row)
+    row.payload = payload
+    row.content_hash = content_hash
+    row.state = state
+    row.error = error
+    s.flush()
+    return row
+
+
+def set_video_enrichment_state(
+    s: Session,
+    video_id: str,
+    kind: str,
+    *,
+    state: str,
+    error: str = "",
+    clear_hash: bool = False,
+) -> VideoEnrichmentRow:
+    """Move a synthesis row's state without touching its payload (see
+    `set_video_attributes_state` — same contract, same reasons)."""
+    row = get_video_enrichment(s, video_id, kind)
+    if row is None:
+        row = VideoEnrichmentRow(video_id=video_id, kind=kind, payload={})
+        s.add(row)
+    row.state = state
+    row.error = error
+    if clear_hash:
+        row.content_hash = ""
+    s.flush()
+    return row
+
+
+def list_project_enrichments(
+    s: Session, project_id: int, kind: str
+) -> list[VideoEnrichmentRow]:
+    """Every synthesis of the given kind across a project's channels — the input
+    to the project-level aggregation (scoped, so one niche never sees another's)."""
+    return list(
+        s.execute(
+            select(VideoEnrichmentRow)
+            .join(
+                CompetitorVideoRow,
+                CompetitorVideoRow.video_id == VideoEnrichmentRow.video_id,
+            )
+            .join(
+                ProjectChannelRow,
+                ProjectChannelRow.channel_id == CompetitorVideoRow.channel_id,
+            )
+            .where(ProjectChannelRow.project_id == project_id)
+            .where(VideoEnrichmentRow.kind == kind)
+            .where(VideoEnrichmentRow.state == "done")
+        ).scalars()
+    )

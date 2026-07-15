@@ -185,6 +185,13 @@ class CompetitorVideoRow(Base):
     is_short: Mapped[bool] = mapped_column(Boolean, default=False)
     thumbnail_url: Mapped[str] = mapped_column(String, default="")
     thumbnail_hash: Mapped[str] = mapped_column(String, default="")
+    # Top-comment collection state. Automatic and deterministic: a snapshot cycle
+    # collects a video's comments once it is a definitive outlier. "" means never
+    # collected; "done"/"disabled" are TERMINAL (what stops the cycle re-asking
+    # every day); "error" is retried on the next cycle.
+    comments_state: Mapped[str] = mapped_column(String, default="")
+    comments_error: Mapped[str] = mapped_column(Text, default="")
+    comments_fetched_at: Mapped[datetime | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
@@ -274,6 +281,67 @@ class VideoAttributesRow(Base):
     )
     source: Mapped[str] = mapped_column(String)  # "syntactic" | "title_llm" | "thumbnail_llm"
     attributes: Mapped[dict] = mapped_column(JSON, default=dict)
+    content_hash: Mapped[str] = mapped_column(String, default="")
+    state: Mapped[str] = mapped_column(String, default="done")  # "running" | "done" | "error"
+    error: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+# ------------------------- Phase 2: comments -------------------------
+#
+# Split by cost, per guideline 9: the raw comments are COLLECTED automatically by
+# the snapshot cycle (deterministic, quota-accounted), while the synthesis over
+# them costs an LLM call and therefore only ever runs from an explicit action.
+
+
+class VideoCommentRow(Base):
+    """A raw top comment of an outlier video, as collected from the Data API.
+
+    Stored verbatim and never interpreted here: the synthesis reads these rows,
+    and every quote it reports is resolved back to one of them, so the model can
+    never invent audience words (the transcript golden rule, applied to comments).
+    """
+
+    __tablename__ = "video_comments"
+    __table_args__ = (
+        Index("ix_video_comments_video_comment", "video_id", "comment_id", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[str] = mapped_column(
+        ForeignKey("competitor_videos.video_id", ondelete="CASCADE")
+    )
+    comment_id: Mapped[str] = mapped_column(String)
+    text: Mapped[str] = mapped_column(Text, default="")
+    like_count: Mapped[int] = mapped_column(Integer, default=0)
+    author: Mapped[str] = mapped_column(String, default="")
+    fetched_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class VideoEnrichmentRow(Base):
+    """An opt-in LLM synthesis over a video's collected data, keyed by kind.
+
+    Only `kind="comment_synthesis"` exists today. It lives here rather than in
+    `video_attributes` on purpose: `metrics.patterns` turns EVERY boolean in an
+    attributes row into a reported packaging pattern, and a comment synthesis is
+    narrative — it must not reach the conditional distributions.
+
+    `content_hash` is the hash of the analysed comment set, so the pass is paid
+    for once and shared across projects; `state`/`error` mirror the attributes row
+    so the UI polls an in-flight call the same way.
+    """
+
+    __tablename__ = "video_enrichments"
+    __table_args__ = (
+        Index("ix_video_enrichments_video_kind", "video_id", "kind", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[str] = mapped_column(
+        ForeignKey("competitor_videos.video_id", ondelete="CASCADE")
+    )
+    kind: Mapped[str] = mapped_column(String)  # "comment_synthesis"
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
     content_hash: Mapped[str] = mapped_column(String, default="")
     state: Mapped[str] = mapped_column(String, default="done")  # "running" | "done" | "error"
     error: Mapped[str] = mapped_column(Text, default="")

@@ -1,32 +1,37 @@
-"""Opt-in AI packaging enrichment: thumbnail (vision) and title (semantics).
+"""Opt-in AI enrichment: thumbnail (vision), title (semantics), comments (synthesis).
 
 Costs an LLM call, so it NEVER runs on a schedule — only on an explicit user
-action (guideline 9). Like the syntactic attributes, the result is persisted in
-`video_attributes` keyed by a **content hash**, so it is paid for once and shared
-across every project that tracks the channel:
+action (guideline 9). Every result is keyed by a **content hash**, so it is paid
+for once and shared across every project that tracks the channel:
 
-| source          | content hash                            | recomputed when          |
-|-----------------|-----------------------------------------|--------------------------|
-| `title_llm`     | sha256 of the title (same as syntactic) | the title string changes |
-| `thumbnail_llm` | `competitor_videos.thumbnail_hash`      | the image BYTES change   |
+| kind        | stored in           | content hash                        | recomputed when       |
+|-------------|---------------------|-------------------------------------|-----------------------|
+| `title`     | `video_attributes`  | sha256 of the title                 | the title changes     |
+| `thumbnail` | `video_attributes`  | `competitor_videos.thumbnail_hash`  | the image BYTES change|
+| `comments`  | `video_enrichments` | sha256 of the collected comment set | the comments change   |
 
 The thumbnail hash is the byte hash the snapshot cycle already maintains (the URL
 is not trusted), so checking the cache costs no network at all — bytes are fetched
-only once the hash says the work is due.
+only once the hash says the work is due. The comment set is likewise already in
+the database (collected automatically), so the gate is a pure read there too.
 
-Each row stores the raw tool output PLUS boolean facets derived here in code.
-`metrics.patterns` only counts booleans, so the facets are what reaches the
-conditional distributions; deriving them here (rather than asking the model for
-them) keeps every threshold — 2 faces, 4 words — auditable and tunable without
-re-paying for the analysis. No score is ever stored (guideline 10).
+The two packaging rows store the raw tool output PLUS boolean facets derived here
+in code. `metrics.patterns` only counts booleans, so the facets are what reaches
+the conditional distributions; deriving them here (rather than asking the model
+for them) keeps every threshold — 2 faces, 4 words — auditable and tunable without
+re-paying for the analysis. The comment synthesis deliberately lands in a
+different table for the mirror-image reason: it is narrative, and must NOT be
+counted as a packaging pattern. No score is ever stored (guideline 10).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from ..analysis.enrichment_prompts import (
+    COMMENT_SYNTHESIS_SYSTEM,
+    COMMENT_SYNTHESIS_TOOL,
     THUMBNAIL_SYSTEM,
     THUMBNAIL_TOOL,
     TITLE_SYSTEM,
@@ -35,15 +40,24 @@ from ..analysis.enrichment_prompts import (
 from ..config import Settings, get_settings
 from ..db import competitors as crepo
 from ..youtube.thumbnails import ThumbnailFetcher, fetch_thumbnail_bytes
+from . import comments as mcomments
 from .attributes import title_content_hash
 
 KIND_TITLE = "title"
 KIND_THUMBNAIL = "thumbnail"
+KIND_COMMENTS = "comments"
 
 SOURCE_TITLE = "title_llm"
 SOURCE_THUMBNAIL = "thumbnail_llm"
+# The comment synthesis is keyed by `video_enrichments.kind`, not by an attributes
+# source — a different store, for the reason in the module docstring.
+SOURCE_COMMENTS = mcomments.KIND
 
-_SOURCES = {KIND_TITLE: SOURCE_TITLE, KIND_THUMBNAIL: SOURCE_THUMBNAIL}
+_SOURCES = {
+    KIND_TITLE: SOURCE_TITLE,
+    KIND_THUMBNAIL: SOURCE_THUMBNAIL,
+    KIND_COMMENTS: SOURCE_COMMENTS,
+}
 
 STATE_RUNNING = "running"
 STATE_DONE = "done"
@@ -68,13 +82,35 @@ _MAGIC = (
 
 
 def source_for(kind: str) -> str:
-    """Map a user-facing kind to the `video_attributes.source` it writes."""
+    """Map a user-facing kind to the storage key its result is written under."""
     try:
         return _SOURCES[kind]
     except KeyError:
         raise ValueError(
-            f"unknown enrichment kind: {kind!r} (use 'thumbnail' or 'title')"
+            f"unknown enrichment kind: {kind!r} "
+            f"(use 'thumbnail', 'title' or 'comments')"
         ) from None
+
+
+def validate_kind(kind: str, *, regenerate: bool = False) -> str:
+    """Check a caller's request up front, returning the storage key.
+
+    Rejecting `regenerate` for the packaging kinds rather than ignoring it: they
+    have nothing to re-fetch (their content is collected by the snapshot cycle),
+    so the flag can only mean the caller expected something we would not do.
+    """
+    source = source_for(kind)
+    if regenerate and kind != KIND_COMMENTS:
+        raise ValueError(
+            f"regenerate applies only to the 'comments' kind, not {kind!r} — "
+            f"packaging is re-analysed automatically when its content hash changes"
+        )
+    return source
+
+
+def is_synthesis(source: str) -> bool:
+    """Whether a storage key lives in `video_enrichments` (vs `video_attributes`)."""
+    return source == SOURCE_COMMENTS
 
 
 @dataclass(frozen=True)
@@ -86,7 +122,8 @@ class Plan:
     source: str
     content_hash: str
     title: str
-    thumbnail_url: str
+    thumbnail_url: str = ""
+    comments: tuple[mcomments.CommentRef, ...] = field(default_factory=tuple)
 
 
 # ------------------------- derived boolean facets -------------------------
@@ -143,25 +180,36 @@ def plan_enrichment(session, video_id: str, kind: str) -> Plan | None:
     """What to enrich, or None when the cache already covers it.
 
     Raises KeyError for an unknown video and ValueError when the content cannot be
-    hashed (a thumbnail whose bytes never downloaded): without a cache key every
-    click would recharge, so we refuse instead of paying repeatedly.
+    hashed (a thumbnail whose bytes never downloaded, a video whose comments were
+    never collected): without a cache key every click would recharge, so we refuse
+    instead of paying repeatedly.
     """
     source = source_for(kind)
     video = crepo.get_video(session, video_id)
     if video is None:
         raise KeyError(video_id)
 
+    comments: tuple[mcomments.CommentRef, ...] = ()
     if kind == KIND_TITLE:
         content_hash = title_content_hash(video.title)
-    else:
+    elif kind == KIND_THUMBNAIL:
         content_hash = video.thumbnail_hash
         if not content_hash:
             raise ValueError(
                 "thumbnail bytes have not been hashed for this video yet — "
                 "nothing to key the cache on; run a snapshot cycle first"
             )
+    else:
+        comments = mcomments.to_refs(crepo.list_video_comments(session, video_id))
+        if not comments:
+            raise ValueError(_no_comments_reason(video))
+        content_hash = mcomments.comments_content_hash(comments)
 
-    existing = crepo.get_video_attributes(session, video_id, source)
+    existing = (
+        crepo.get_video_enrichment(session, video_id, source)
+        if is_synthesis(source)
+        else crepo.get_video_attributes(session, video_id, source)
+    )
     if (
         existing is not None
         and existing.state == STATE_DONE
@@ -172,7 +220,25 @@ def plan_enrichment(session, video_id: str, kind: str) -> Plan | None:
 
     return Plan(
         video_id=video_id, kind=kind, source=source, content_hash=content_hash,
-        title=video.title, thumbnail_url=video.thumbnail_url,
+        title=video.title, thumbnail_url=video.thumbnail_url, comments=comments,
+    )
+
+
+def _no_comments_reason(video) -> str:
+    """Say WHY there is nothing to synthesise — the UI renders this verbatim."""
+    if video.comments_state == "disabled":
+        return "comments are disabled on this video, so there is nothing to synthesise"
+    if video.comments_state == "error":
+        return (
+            f"the last comment collection failed ({video.comments_error}) — "
+            f"it is retried on the next snapshot cycle"
+        )
+    if video.comments_state == "done":
+        # Collected successfully and the thread was simply empty.
+        return "this video has no comments, so there is nothing to synthesise"
+    return (
+        "no comments have been collected for this video yet — they are collected "
+        "automatically once it becomes a definitive outlier"
     )
 
 
@@ -204,6 +270,15 @@ def run_enrichment(
             model=settings.enrich_title_model or None,
         )
 
+    if plan.kind == KIND_COMMENTS:
+        return llm.select(
+            system=COMMENT_SYNTHESIS_SYSTEM,
+            user=mcomments.build_user_prompt(plan.title, plan.comments),
+            tool=COMMENT_SYNTHESIS_TOOL,
+            tool_name=COMMENT_SYNTHESIS_TOOL["name"],
+            model=settings.enrich_comments_model or None,
+        )
+
     data = thumbnail_fetcher(plan.thumbnail_url)
     return llm.select(
         system=THUMBNAIL_SYSTEM,
@@ -216,7 +291,22 @@ def run_enrichment(
 
 
 def save_enrichment(session, plan: Plan, raw: dict):
-    """Persist the raw tool output plus the derived facets, marking the row done."""
+    """Persist the model's output, marking the row done.
+
+    The packaging kinds store the raw tool output merged with the facets derived
+    in code; the synthesis stores the payload with every quote resolved back to a
+    real stored comment.
+    """
+    if plan.kind == KIND_COMMENTS:
+        return crepo.upsert_video_enrichment(
+            session,
+            video_id=plan.video_id,
+            kind=plan.source,
+            payload=mcomments.build_payload(raw, plan.comments),
+            content_hash=plan.content_hash,
+            state=STATE_DONE,
+            error="",
+        )
     return crepo.upsert_video_attributes(
         session,
         video_id=plan.video_id,
@@ -230,15 +320,23 @@ def save_enrichment(session, plan: Plan, raw: dict):
 
 def mark_running(session, video_id: str, source: str) -> None:
     """Flag the row as in flight so the UI can show it (polled like a backfill)."""
-    crepo.set_video_attributes_state(session, video_id, source, state=STATE_RUNNING)
+    if is_synthesis(source):
+        crepo.set_video_enrichment_state(session, video_id, source, state=STATE_RUNNING)
+    else:
+        crepo.set_video_attributes_state(session, video_id, source, state=STATE_RUNNING)
 
 
 def mark_error(session, video_id: str, source: str, message: str) -> None:
     """Record a visible failure. The content hash is cleared so the next explicit
     click retries this video instead of treating the failure as cached."""
-    crepo.set_video_attributes_state(
-        session, video_id, source, state=STATE_ERROR, error=message, clear_hash=True
-    )
+    if is_synthesis(source):
+        crepo.set_video_enrichment_state(
+            session, video_id, source, state=STATE_ERROR, error=message, clear_hash=True
+        )
+    else:
+        crepo.set_video_attributes_state(
+            session, video_id, source, state=STATE_ERROR, error=message, clear_hash=True
+        )
 
 
 # The enrichment writes RAW attributes only. It is deliberately absent from the

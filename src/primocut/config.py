@@ -99,6 +99,12 @@ class Settings(BaseSettings):
     youtube_recent_days: int = 7
     # Top-of-uploads window scanned each cycle to detect newly published videos.
     youtube_uploads_scan_limit: int = 15
+    # Pages of top comments collected when a video becomes a definitive outlier
+    # (commentThreads.list: 1 quota unit per page of 100). Collection is automatic
+    # and free of LLM cost; the tail of a long thread adds noise, not signal.
+    # Must be >= 1: collection is once-per-video, so a zero here would settle every
+    # outlier it touched as "collected, no comments" and never revisit them.
+    youtube_comment_pages: int = Field(default=2, ge=1)
 
     # --- Phase 2: snapshot scheduler (rq-scheduler) ---
     # Daily pass over ALL videos of active channels; 6-hourly pass over videos
@@ -151,6 +157,7 @@ class Settings(BaseSettings):
     # the vision model must support image input.
     enrich_title_model: str = ""
     enrich_vision_model: str = ""
+    enrich_comments_model: str = ""
 
 
 def get_settings() -> Settings:

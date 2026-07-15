@@ -31,7 +31,7 @@ def test_init_creates_schema_and_stamps_versions(tmp_path):
     with db.session() as s:
         versions = list(s.execute(select(SchemaMigration.version)).scalars())
     # base + drop-moments + job stage_history + drop-topic-status
-    assert versions == [1, 2, 3, 4, 5]
+    assert versions == [1, 2, 3, 4, 5, 6]
 
 
 def test_migration_upgrades_legacy_db_preserving_topics(tmp_path):
@@ -60,7 +60,7 @@ def test_migration_upgrades_legacy_db_preserving_topics(tmp_path):
 
     with db.session() as s:
         versions = list(s.execute(select(SchemaMigration.version)).scalars())
-        assert versions == [1, 2, 3, 4, 5]
+        assert versions == [1, 2, 3, 4, 5, 6]
         # cut_moments table is gone
         tables = list(s.execute(text(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -79,7 +79,7 @@ def test_init_is_idempotent(tmp_path):
     db.init()  # must not duplicate versions nor fail
     with db.session() as s:
         versions = list(s.execute(select(SchemaMigration.version)).scalars())
-    assert versions == [1, 2, 3, 4, 5]
+    assert versions == [1, 2, 3, 4, 5, 6]
 
 
 def test_video_crud_and_status(tmp_path):
