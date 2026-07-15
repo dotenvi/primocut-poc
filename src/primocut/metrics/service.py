@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from ..config import Settings, get_settings
 from ..db import competitors as crepo
+from . import comments as mcomments
 from . import core
 from .attributes import SOURCE as ATTR_SOURCE
 from .enrichment import SOURCE_THUMBNAIL, SOURCE_TITLE
@@ -187,6 +188,23 @@ def _patterns_for(session, all_scored: list[_Scored], *, settings: Settings) -> 
     return out
 
 
+def _comment_synthesis(session, video_id: str) -> dict | None:
+    """The synthesis row, or None where the user never asked for one.
+
+    Same envelope as an enrichment attributes entry (`values`/`state`/`error`), so
+    the UI polls an in-flight synthesis with the very same predicate.
+    """
+    row = crepo.get_video_enrichment(session, video_id, mcomments.KIND)
+    if row is None:
+        return None
+    return {
+        "values": row.payload,
+        "state": row.state,
+        "error": row.error,
+        "updated_at": row.updated_at.isoformat(),
+    }
+
+
 # ------------------------- video report -------------------------
 
 
@@ -248,6 +266,15 @@ def video_report(session, channel_id, video_id, *, settings=None, now=None) -> d
             "current_vph": res.current_vph, "recent_avg_vph": res.recent_avg_vph,
         },
         "attributes": _attributes_by_source(session, video_id),
+        # Collection state and synthesis are reported separately: the comments are
+        # collected automatically, the synthesis over them is not (guideline 9),
+        # so the UI must be able to say "collected, not synthesised".
+        "comments": {
+            "collected": crepo.count_video_comments(session, video_id),
+            "state": video.comments_state,
+            "error": video.comments_error,
+        },
+        "comment_synthesis": _comment_synthesis(session, video_id),
         "packaging_changes": [
             {"field": c.field, "old_value": c.old_value, "new_value": c.new_value,
              "detected_at": c.detected_at.isoformat(),
@@ -347,6 +374,26 @@ def channel_dashboard(session, channel_id, *, settings=None, now=None) -> dict |
 # ------------------------- project-scoped selection -------------------------
 
 
+def definitive_outlier_ids_for_channel(
+    session, channel_id, *, settings=None, now=None
+) -> list[str]:
+    """The channel's definitive outliers.
+
+    Channel-scoped and therefore project-independent, which is what the snapshot
+    cycle needs: it iterates channels, and a channel's scores are the same in
+    every project that tracks it.
+    """
+    settings = settings or get_settings()
+    now = _now(now)
+    threshold = settings.pattern_outlier_bracket
+    scored, _ = _channel_scores(session, channel_id, settings=settings, now=now)
+    return [
+        sc.video_id
+        for sc in scored.values()
+        if _is_definitive_outlier(sc, threshold=threshold)
+    ]
+
+
 def definitive_outlier_ids(session, project_id, *, settings=None, now=None) -> list[str] | None:
     """The project's definitive outliers — the batch-enrichment target.
 
@@ -361,14 +408,12 @@ def definitive_outlier_ids(session, project_id, *, settings=None, now=None) -> l
     if crepo.get_project(session, project_id) is None:
         return None
 
-    threshold = settings.pattern_outlier_bracket
     out: list[str] = []
     for c in crepo.list_project_channels(session, project_id):
-        scored, _ = _channel_scores(session, c.channel_id, settings=settings, now=now)
         out.extend(
-            sc.video_id
-            for sc in scored.values()
-            if _is_definitive_outlier(sc, threshold=threshold)
+            definitive_outlier_ids_for_channel(
+                session, c.channel_id, settings=settings, now=now
+            )
         )
     return out
 
@@ -406,6 +451,16 @@ def project_dashboard(session, project_id, *, settings=None, now=None) -> dict |
     # have a row for that source; outliers = the definitive (non-provisional,
     # >= threshold) subset of them.
     patterns = _patterns_for(session, all_scored, settings=settings)
+
+    # What this niche's audience asked for, merged across the project's syntheses.
+    # Scoped to the project (a request in another niche never leaks in) and
+    # aggregated in code — no second LLM pass.
+    audience_requests = mcomments.aggregate_requests(
+        [
+            (row.video_id, row.payload)
+            for row in crepo.list_project_enrichments(session, project_id, mcomments.KIND)
+        ]
+    )
 
     # Packaging changes across the project's channels, with their persisted impact.
     packaging = []
@@ -450,6 +505,7 @@ def project_dashboard(session, project_id, *, settings=None, now=None) -> dict |
             for sc in ranked
         ],
         "patterns": patterns,
+        "audience_requests": audience_requests,
         "packaging": packaging,
         "resurgences": resurgences,
     }
