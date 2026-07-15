@@ -368,3 +368,99 @@ button:disabled { opacity: 0.5; cursor: default; }
 .topic-head .fire, .topic-head .watch { flex: 0 0 auto; }
 .topic-meta { margin: 3px 0 0 26px; font-family: var(--f-mono); font-size: 0.82em; font-variant-numeric: tabular-nums; }
 .topic-body { margin: 6px 0 2px 26px; }
+
+/* ------------------------------------------------------------------ *\
+   Competitors (Phase 2) — project selector, dashboards, video detail.
+   Same three status colors: cue = provisional/collecting, ready = win,
+   tally = loss. No new palette.
+\* ------------------------------------------------------------------ */
+
+/* Numbers read as data: mono + tabular figures, like the timestamps. */
+.mono { font-family: var(--f-mono); font-size: 0.9em; font-variant-numeric: tabular-nums; }
+
+/* Project selector + manage panel. */
+.switcher { margin: 14px 0 18px; }
+.switcher-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.proj-select {
+  padding: 9px 12px; border-radius: var(--r-input);
+  border: 1px solid var(--border); background: var(--inset); color: var(--fg);
+  font: inherit; font-family: var(--f-label); font-size: 1.1rem; letter-spacing: 0.03em;
+  min-width: 220px; cursor: pointer;
+}
+.proj-select:focus { outline: none; border-color: var(--cue); }
+.mini.active { color: var(--fg); border-color: var(--fg); }
+.manage-panel { margin-top: 12px; }
+.manage-panel h3 { margin: 18px 0 6px; font-size: 1rem; }
+.manage-panel h3:first-of-type { margin-top: 0; }
+
+/* Tab bar outside a card: undo the card-bleed margins. */
+.tab-bar.flush { margin: 0 0 20px; padding: 0; }
+
+/* Metric tables (outlier rankings, pattern distributions). */
+.otable-wrap { overflow-x: auto; }
+.otable { width: 100%; border-collapse: collapse; }
+.otable th, .otable td {
+  padding: 9px 10px; text-align: left; vertical-align: middle;
+  border-bottom: 1px solid var(--border);
+}
+.otable th {
+  font-family: var(--f-label); font-weight: 600; font-size: 0.8rem;
+  letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted);
+}
+.otable th.num, .otable td.num { text-align: right; }
+.otable tbody tr:hover { background: var(--inset); }
+
+/* Inline format tag (e.g. "short") — quieter than a status pill. */
+.tag {
+  display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px;
+  background: var(--neutral-dim); color: var(--muted);
+  font-family: var(--f-label); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase;
+}
+
+/* A score computed before the video matured — same amber as "processing". */
+.status-provisional { color: var(--cue); background: var(--cue-dim); }
+
+/* "Still collecting" notice — never show an empty dashboard instead. */
+.collecting {
+  background: var(--cue-dim); border: 1px solid var(--cue);
+  border-radius: var(--r-input); padding: 10px 14px; margin: 12px 0; color: var(--fg);
+}
+
+/* Stat tiles (baselines, engagement, velocity). */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.tile h3 { margin: 0 0 4px; font-size: 1.05rem; }
+.tile-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 7px 0; border-bottom: 1px solid var(--border);
+}
+.tile-row:last-child { border-bottom: 0; }
+
+/* Snapshot time series — hand-built SVG, no chart library. */
+.sparkline { width: 100%; display: block; background: var(--inset); border-radius: var(--r-card); }
+.sparkline-area { fill: var(--tally-dim); stroke: none; }
+.sparkline-line { fill: none; stroke: var(--tally); stroke-width: 2; }
+
+/* Cadence histograms — reuse the chat-activity bar well, add labels below. */
+.spark.bars { height: auto; align-items: flex-end; gap: 4px; }
+.bar-col { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.bar-well { width: 100%; height: 80px; display: flex; align-items: flex-end; }
+.bar-col .spark-bar { flex: none; width: 100%; }
+.bar-label { font-family: var(--f-mono); font-size: 0.62rem; color: var(--muted); }
+
+/* Channel / video headers. */
+.ch-head { margin: 8px 0 16px; }
+.ch-head h2, .vd-head h2 { border-bottom: 0; padding-bottom: 0; margin: 0 0 2px; }
+.vd-head { display: flex; align-items: flex-start; gap: 16px; margin: 8px 0 20px; }
+.vd-thumb { width: 180px; flex: none; border-radius: var(--r-card); }
+@media (max-width: 600px) {
+  .vd-head { flex-direction: column; }
+  .vd-thumb { width: 100%; }
+}
+
+/* Syntactic title attributes — a row of chips. */
+.attr-list { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.attr {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 12px; border-radius: 999px;
+  background: var(--inset); border: 1px solid var(--border); font-size: 0.85rem;
+}
