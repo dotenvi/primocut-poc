@@ -19,7 +19,10 @@ from ..metrics import service as metrics_service
 
 
 class EnrichIn(BaseModel):
-    kind: str  # "thumbnail" | "title"
+    kind: str  # "thumbnail" | "title" | "comments"
+    # Comments only: re-fetch them from the API before synthesising again. The
+    # packaging kinds have nothing to re-fetch and reject it (400).
+    regenerate: bool = False
 
 
 def build_metrics_router(
@@ -59,8 +62,9 @@ def build_metrics_router(
         queue=Depends(get_queue_dep),
         settings=Depends(get_settings_dep),
     ) -> dict:
-        """Enrich this video's packaging with an LLM. Opt-in: costs money, so it
-        runs only from this explicit action (guideline 9)."""
+        """Enrich this video's packaging, or synthesise its comments, with an LLM.
+        Opt-in: costs money, so it runs only from this explicit action
+        (guideline 9)."""
         from ..worker.queue import enqueue_enrichment
 
         with db.session() as s:
@@ -69,7 +73,8 @@ def build_metrics_router(
                 raise HTTPException(status_code=404, detail="video not found")
         try:
             return enqueue_enrichment(
-                [video_id], body.kind, settings=settings, queue=queue
+                [video_id], body.kind, regenerate=body.regenerate,
+                settings=settings, queue=queue,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))

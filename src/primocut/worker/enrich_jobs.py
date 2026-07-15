@@ -1,7 +1,9 @@
-"""RQ job: AI packaging enrichment of a set of videos (opt-in — costs LLM).
+"""RQ job: AI enrichment of a set of videos (opt-in — costs LLM).
 
-Runs ONLY from an explicit user action — the video-detail button or the project
-batch (guideline 9). The single-video case is just a one-element list, so there is
+Drives all three kinds — `thumbnail`, `title` and the comment `comments` synthesis
+— because they differ only in what `metrics.enrichment` plans and saves. Runs ONLY
+from an explicit user action: the video-detail button, the project batch or the
+CLI (guideline 9). The single-video case is just a one-element list, so there is
 one code path, one isolation story and one thing for the UI to poll.
 
 Resilience (DEVELOPMENT.md §4): per-video isolation, exactly like the snapshot
@@ -12,6 +14,7 @@ the whole run. Network happens outside the write transactions.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from ..config import Settings, get_settings
@@ -26,17 +29,24 @@ def enrich_videos(
     video_ids: Iterable[str],
     kind: str,
     *,
+    regenerate: bool = False,
     settings: Settings | None = None,
     database=None,
     llm: Any | None = None,
     thumbnail_fetcher: ThumbnailFetcher = fetch_thumbnail_bytes,
+    client=None,
 ) -> dict:
-    """Enrich each video's `kind` packaging, skipping whatever the cache covers.
+    """Enrich each video's `kind`, skipping whatever the cache covers.
+
+    `regenerate` (comments only) re-fetches the comments from the API before
+    planning, so the refreshed set changes the content hash and the cache gate
+    lets the pass through with no special case.
 
     Raises ValueError for an unknown `kind` (a caller bug, not a per-video
     failure); every other error is contained to its own video.
     """
-    source = enrichment.source_for(kind)  # fail fast: a bad kind is not a video error
+    # fail fast: a bad request is a caller bug, not a per-video error
+    source = enrichment.validate_kind(kind, regenerate=regenerate)
     settings = settings or get_settings()
     if database is None:
         from ..db import get_database
@@ -50,6 +60,15 @@ def enrich_videos(
     enriched = skipped = failed = 0
     for video_id in video_ids:
         try:
+            if regenerate:
+                # Network + quota, before any transaction and before the gate.
+                from .comment_collection import collect_video_comments
+
+                collect_video_comments(
+                    video_id, settings=settings, database=database,
+                    client=client, now=datetime.now(timezone.utc),
+                )
+
             with database.session() as s:
                 plan = enrichment.plan_enrichment(s, video_id, kind)
             if plan is None:

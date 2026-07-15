@@ -417,12 +417,18 @@ def metrics_refresh() -> None:
 def metrics_enrich(
     project: int | None = typer.Option(None, "--project", "-p", help="Project ID"),
     video: str | None = typer.Option(None, "--video", "-v", help="A single video ID"),
-    kind: str = typer.Option(..., "--kind", "-k", help="thumbnail | title"),
+    kind: str = typer.Option(..., "--kind", "-k", help="thumbnail | title | comments"),
+    regenerate: bool = typer.Option(
+        False, "--regenerate",
+        help="comments only: re-fetch them from the API before synthesising again",
+    ),
 ) -> None:
-    """Enrich packaging with an LLM (opt-in — this COSTS money).
+    """Enrich a video with an LLM (opt-in — this COSTS money).
 
-    Runs inline (no worker needed) over a project's definitive outliers, or over a
-    single video. Videos whose content hash is unchanged are skipped for free.
+    `thumbnail`/`title` analyse the packaging; `comments` synthesises the comments
+    the snapshot cycle already collected. Runs inline (no worker needed) over a
+    project's definitive outliers, or over a single video. Videos whose content
+    hash is unchanged are skipped for free.
     """
     setup_logging()
     from .db import get_database
@@ -446,7 +452,9 @@ def metrics_enrich(
             raise typer.Exit(code=1)
 
     try:
-        result = enrich_videos(video_ids, kind, settings=settings, database=database)
+        result = enrich_videos(
+            video_ids, kind, regenerate=regenerate, settings=settings, database=database
+        )
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)

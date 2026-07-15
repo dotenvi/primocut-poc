@@ -31,7 +31,7 @@ class ChannelIn(BaseModel):
 
 
 class EnrichIn(BaseModel):
-    kind: str  # "thumbnail" | "title"
+    kind: str  # "thumbnail" | "title" | "comments"
 
 
 def _project_dict(row) -> dict[str, Any]:
@@ -171,7 +171,8 @@ def build_projects_router(
         queue=Depends(get_queue_dep),
         settings=Depends(get_settings_dep),
     ) -> dict:
-        """Enrich the packaging of this project's definitive outliers with an LLM.
+        """Enrich this project's definitive outliers with an LLM — their packaging
+        or, for kind="comments", the synthesis of the comments already collected.
         Opt-in: costs money, so it runs only from this explicit action
         (guideline 9). Selection is a pure read; the work goes to the queue."""
         from ..metrics import service as metrics_service

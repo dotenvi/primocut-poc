@@ -23,24 +23,29 @@ def enqueue_enrichment(
     video_ids: list[str],
     kind: str,
     *,
+    regenerate: bool = False,
     settings: Settings | None = None,
     queue=None,
 ) -> dict:
     """Enqueue the opt-in AI enrichment of a set of videos (guideline 9).
 
-    The kind is validated here so a caller mistake surfaces as a rejected request
-    rather than as a job that fails once per video.
+    The request is validated here so a caller mistake surfaces as a rejected
+    request rather than as a job that fails once per video.
     """
-    from ..metrics.enrichment import source_for
+    from ..metrics.enrichment import validate_kind
 
     settings = settings or get_settings()
-    source_for(kind)  # raises ValueError on an unknown kind
+    validate_kind(kind, regenerate=regenerate)  # raises ValueError on a bad request
 
     from .enrich_jobs import enrich_videos
 
     q = queue if queue is not None else get_queue(settings)
     rq_job = q.enqueue(
-        enrich_videos, list(video_ids), kind, job_timeout=settings.rq_job_timeout
+        enrich_videos,
+        list(video_ids),
+        kind,
+        regenerate=regenerate,
+        job_timeout=settings.rq_job_timeout,
     )
     logger.info("Enqueued %s enrichment of %d video(s) (rq %s)",
                 kind, len(video_ids), rq_job.id)
