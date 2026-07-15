@@ -279,9 +279,9 @@ def test_unknown_kind_is_rejected(tmp_path):
     db = _db(tmp_path)
     _video(db, "UCc", "v1")
     try:
-        _run(db, tmp_path, ["v1"], "comments", llm=FakeLLM())
+        _run(db, tmp_path, ["v1"], "nonsense", llm=FakeLLM())
     except ValueError as exc:
-        assert "comments" in str(exc)
+        assert "nonsense" in str(exc)
     else:
         raise AssertionError("an unknown kind must raise ValueError")
 
@@ -360,7 +360,7 @@ def test_video_enrich_endpoint_404_and_400(tmp_path):
     assert client.post("/api/channels/UCc/videos/nope/enrich",
                        json={"kind": "title"}).status_code == 404
     assert client.post("/api/channels/UCc/videos/v1/enrich",
-                       json={"kind": "comments"}).status_code == 400
+                       json={"kind": "nonsense"}).status_code == 400
 
 
 def test_project_enrich_endpoint_targets_definitive_outliers_only(tmp_path):
