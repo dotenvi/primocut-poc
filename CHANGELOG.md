@@ -10,6 +10,17 @@ unstable: breaking changes may land in any minor release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Shorts longer than 60s are no longer classified as long-form** — the
+  `is_short` duration heuristic capped at 60 seconds, but YouTube has allowed
+  Shorts of up to 3 minutes since October 2024, so every Short in the 61-180s
+  range was counted as long-form — shrinking the Shorts baseline sample and
+  polluting the long-form one. `PRIMOCUT_YOUTUBE_SHORT_MAX_SECONDS` now
+  defaults to `180`.
+  Channels backfilled before this lands keep their old `is_short` values until
+  they are re-collected (the flag is written at collection time).
+
 ## [0.2.1] - 2026-07-15
 
 Fixes a competitor channel registration that silently never collected when the

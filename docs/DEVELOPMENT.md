@@ -803,7 +803,7 @@ The analysis is provider-agnostic (`SelectionLLM` interface). Automatic selectio
 | `PRIMOCUT_YTDLP_PLAYER_CLIENTS` | List of `player_client` values to try on download |
 | `PRIMOCUT_GPU_LOCK_TIMEOUT` | GPU lock timeout in Redis (auto-releases; default 2 h) |
 | `PRIMOCUT_YOUTUBE_API_KEY` | YouTube Data API v3 key (Phase 2 competitor modeling) |
-| `PRIMOCUT_YOUTUBE_SHORT_MAX_SECONDS` | Duration threshold for the `is_short` heuristic (default 60) |
+| `PRIMOCUT_YOUTUBE_SHORT_MAX_SECONDS` | Duration threshold for the `is_short` heuristic (default 180) |
 | `PRIMOCUT_YOUTUBE_BACKFILL_LIMIT` | Uploads collected on a new channel's backfill (default 120) |
 | `PRIMOCUT_YOUTUBE_COMMENT_PAGES` | Pages of top comments collected per outlier (default 2 = up to 200 comments, 1 quota unit per page). Costs no LLM call |
 | `PRIMOCUT_SNAPSHOT_DAILY_CRON` / `PRIMOCUT_SNAPSHOT_RECENT_CRON` | Snapshot cadences (daily / 6h) |
@@ -1097,8 +1097,10 @@ and the projects/competitors API + CLI. Key implementation decisions:
   reports its probe's units. Batching is exploited: `videos.list` with up to 50 IDs = 1 unit.
   **No DB persistence of quota yet** — that belongs with the scheduled snapshot cycles.
 - **`is_short` is a duration heuristic** (`duration_s <= PRIMOCUT_YOUTUBE_SHORT_MAX_SECONDS`,
-  default 60): the Data API does not flag Shorts. Refined in a later phase; it feeds the
-  separate Shorts baseline.
+  default 180 = YouTube's own Shorts ceiling since Oct 2024): the Data API does not flag
+  Shorts. Refined in a later phase; it feeds the separate Shorts baseline. A long-form video
+  under 3 minutes is a false positive; the accurate fix is probing `youtube.com/shorts/<id>`
+  (200 = Short, redirect to `/watch` = not), at one HTTP request per video.
 - **Initial `thumbnail_hash` = SHA-256 of the thumbnail image bytes** (not the URL), computed at
   backfill via an **injectable fetcher** (tests run without network); a fetch/hash failure
   degrades to an empty hash. Byte hashing (vs. URL hashing) lets a later snapshot detect a

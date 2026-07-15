@@ -92,7 +92,10 @@ class Settings(BaseSettings):
     # A video is treated as a Short when its duration is at most this many
     # seconds. The Data API does not flag Shorts, so this is a heuristic
     # (refined in a later phase); it feeds the separate Shorts baseline.
-    youtube_short_max_seconds: int = 60
+    # 180 is YouTube's own Shorts ceiling since October 2024. A long-form video
+    # under 3 minutes is the false positive this accepts; the reverse (missing
+    # every 61-180s Short) was the common case in practice.
+    youtube_short_max_seconds: int = 180
     # How many recent uploads to backfill when a channel is new to the system.
     youtube_backfill_limit: int = 120
     # A video is "recent" (part of the 6h snapshot pass) for this many days.
