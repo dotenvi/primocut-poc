@@ -11,6 +11,15 @@ from .jobs import process_video
 logger = get_logger(__name__)
 
 
+class QueueUnavailableError(RuntimeError):
+    """The queue broker could not be reached, so the job was not enqueued.
+
+    `redis-py` connects lazily: building the `Queue` never fails, only the
+    `enqueue` call does. Callers that already persisted state for the job must
+    catch this and reconcile that state, or it outlives the failed request.
+    """
+
+
 def get_queue(settings: Settings | None = None):
     from redis import Redis
     from rq import Queue
