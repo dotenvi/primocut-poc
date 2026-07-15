@@ -23,7 +23,28 @@ export const api = {
   reenqueue: (id) => req('POST', `/videos/${id}/reenqueue`),
   stop: (id) => req('POST', `/videos/${id}/stop`),
   remove: (id) => req('DELETE', `/videos/${id}`),
+
+  // Phase 2 — competitor channel modeling.
+  projects: () => req('GET', '/projects'),
+  project: (pid) => req('GET', `/projects/${pid}`),
+  createProject: (body) => req('POST', '/projects', body),
+  patchProject: (pid, body) => req('PATCH', `/projects/${pid}`, body),
+  deleteProject: (pid) => req('DELETE', `/projects/${pid}`),
+  channels: (pid) => req('GET', `/projects/${pid}/channels`),
+  addChannel: (pid, url) => req('POST', `/projects/${pid}/channels`, { url }),
+  detachChannel: (pid, cid) => req('DELETE', `/projects/${pid}/channels/${cid}`),
+  projectDashboard: (pid) => req('GET', `/projects/${pid}/dashboard`),
+  channelDashboard: (cid) => req('GET', `/channels/${cid}/dashboard`),
+  competitorVideo: (cid, vid) => req('GET', `/channels/${cid}/videos/${vid}`),
 }
+
+// Public YouTube watch URL (built client-side; the metrics payload carries only the id).
+export const youtubeWatch = (id) => `https://www.youtube.com/watch?v=${id}`
+
+// A channel's backfill is terminal (no longer worth polling) once it is done,
+// errored, or was skipped (channel already known to the system).
+const BACKFILL_ACTIVE = ['pending', 'queued', 'running']
+export const backfillActive = (state) => BACKFILL_ACTIVE.includes(state)
 
 export const ACTIVE = ['queued', 'downloading', 'transcribing', 'analyzing']
 export const isActive = (status) => ACTIVE.includes(status)
