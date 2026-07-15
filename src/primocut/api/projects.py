@@ -134,6 +134,7 @@ def build_projects_router(
         client=Depends(get_youtube_client_dep),
     ) -> dict:
         from ..worker.channels import register_channel
+        from ..worker.queue import QueueUnavailableError
 
         try:
             return register_channel(
@@ -150,6 +151,10 @@ def build_projects_router(
             raise HTTPException(status_code=400, detail=str(exc))
         except YouTubeError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
+        except QueueUnavailableError as exc:
+            raise HTTPException(
+                status_code=503, detail=f"queue unavailable: {exc}"
+            )
 
     @router.get("/projects/{project_id}/dashboard")
     def project_dashboard(
