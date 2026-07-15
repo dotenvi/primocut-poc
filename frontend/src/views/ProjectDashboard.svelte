@@ -8,6 +8,7 @@
 
   let data = null // null while loading
   let error = ''
+  let notice = ''
 
   async function load() {
     try {
@@ -18,6 +19,21 @@
     }
   }
   onMount(load)
+
+  // Opt-in batch: enriches the definitive outliers only (the same set the
+  // patterns below are computed from). Costs one LLM call per un-cached video.
+  async function enrich(kind) {
+    notice = ''
+    try {
+      const r = await api.enrichProject(pid, kind)
+      notice = r.videos
+        ? `Enriching the ${kind} of ${r.videos} outlier${r.videos === 1 ? '' : 's'} — ` +
+          'open a video to follow it. Videos analysed before are not charged again.'
+        : 'No definitive outlier to enrich yet.'
+    } catch (e) {
+      error = e.message
+    }
+  }
 
   // Channels are linked but nothing is scored yet — the snapshots have not
   // accumulated. Say so instead of rendering an empty niche view.
@@ -55,16 +71,30 @@
   </section>
 
   <section>
-    <h2>Patterns</h2>
+    <div class="tab-bar flush">
+      <h2 class="grow">Patterns</h2>
+      <button class="mini ai tab-bar-action" on:click={() => enrich('thumbnail')}>
+        ✨ Enrich outlier thumbnails
+      </button>
+      <button class="mini ai" on:click={() => enrich('title')}>
+        ✨ Enrich outlier titles
+      </button>
+    </div>
+    {#if notice}<p class="collecting">{notice}</p>{/if}
     {#if data.patterns.length === 0}
       <p class="muted">Not enough definitive outliers yet to report patterns.</p>
     {:else}
-      <p class="muted">Title attributes among definitive outliers vs. the whole project population.</p>
+      <p class="muted">
+        Packaging attributes among definitive outliers vs. the project population. Each source is
+        measured against the videos analysed for it, so AI patterns appear only once enough
+        outliers have been enriched.
+      </p>
       <div class="otable-wrap">
         <table class="otable">
           <thead>
             <tr>
               <th>Attribute</th>
+              <th>Source</th>
               <th class="num">Outliers</th>
               <th class="num">Population</th>
               <th class="num">Lift</th>
@@ -72,9 +102,10 @@
             </tr>
           </thead>
           <tbody>
-            {#each data.patterns as p (p.attribute)}
+            {#each data.patterns as p (p.source + p.attribute)}
               <tr>
                 <td>{p.attribute}</td>
+                <td><span class="tag">{p.source}</span></td>
                 <td class="num mono">{pct(p.outlier_rate)}</td>
                 <td class="num mono">{pct(p.population_rate)}</td>
                 <td class="num mono">{multiplier(p.lift)}</td>

@@ -1,6 +1,6 @@
 <script>
-  import { onMount } from 'svelte'
-  import { api, youtubeWatch } from '../lib/api.js'
+  import { onDestroy, onMount } from 'svelte'
+  import { api, enrichActive, youtubeWatch } from '../lib/api.js'
   import Sparkline from '../components/Sparkline.svelte'
   import { compactNumber, pct, vphLabel, multiplier, shortDate, hms } from '../lib/format.js'
 
@@ -10,6 +10,7 @@
 
   let data = null // null while loading
   let error = ''
+  let timer = null
 
   async function load() {
     try {
@@ -20,14 +21,41 @@
     }
   }
   onMount(load)
+  onDestroy(() => clearInterval(timer))
+
+  // The enrichment runs on the queue, so poll while a call is in flight — and
+  // stop as soon as none is, like the channel backfill polling.
+  $: running = data && ['title_llm', 'thumbnail_llm'].some((s) => enrichActive(data.attributes[s]))
+  $: if (!running) {
+    clearInterval(timer)
+    timer = null
+  }
+
+  async function enrich(kind) {
+    try {
+      await api.enrichVideo(cid, vid, kind)
+      await load()
+      if (!timer) timer = setInterval(load, 2000)
+    } catch (e) {
+      error = e.message
+    }
+  }
 
   $: views = data ? data.snapshots.map((s) => s.views) : []
-  // Syntactic attributes are a flat object; `source` is metadata, not a feature.
-  $: attributes = data && data.attributes
-    ? Object.entries(data.attributes).filter(([k]) => k !== 'source')
-    : []
+  $: syntactic = data && data.attributes.syntactic
+  $: titleAi = data && data.attributes.title_llm
+  $: thumbAi = data && data.attributes.thumbnail_llm
 
-  const fmt = (v) => (typeof v === 'boolean' ? (v ? '✓' : '✗') : v)
+  // The derived boolean facets (thumb_*/title_*) exist for the pattern
+  // distributions; what a human wants to see here is the raw observation.
+  const RAW = ([k]) => !k.startsWith('thumb_') && !k.startsWith('title_')
+  const rawEntries = (attrs) => (attrs ? Object.entries(attrs.values).filter(RAW) : [])
+
+  const fmt = (v) => {
+    if (typeof v === 'boolean') return v ? '✓' : '✗'
+    if (Array.isArray(v)) return v.length ? v.join(', ') : '—'
+    return v === '' ? '—' : v
+  }
 </script>
 
 <p><a class="mini link" href={`#/projects/${pid}/channels/${cid}`}>‹ back to channel</a></p>
@@ -105,14 +133,68 @@
 
   <section>
     <h2>Title attributes</h2>
-    {#if attributes.length === 0}
+    {#if rawEntries(syntactic).length === 0}
       <p class="muted">No syntactic attributes recorded yet — run <code>primocut metrics refresh</code>.</p>
     {:else}
       <ul class="attr-list">
-        {#each attributes as [k, v] (k)}
+        {#each rawEntries(syntactic) as [k, v] (k)}
           <li class="attr"><span class="muted">{k}</span> <b class="mono">{fmt(v)}</b></li>
         {/each}
       </ul>
+    {/if}
+  </section>
+
+  <section>
+    <div class="tab-bar flush">
+      <h2 class="grow">Thumbnail attributes (AI)</h2>
+      <button
+        class="mini ai tab-bar-action"
+        disabled={enrichActive(thumbAi)}
+        on:click={() => enrich('thumbnail')}
+      >
+        ✨ {thumbAi && thumbAi.state === 'done' ? 'Re-analyse' : 'Analyse'} thumbnail with AI
+      </button>
+    </div>
+    {#if enrichActive(thumbAi)}
+      <p class="processing">Analysing the thumbnail…</p>
+    {:else if thumbAi && thumbAi.state === 'error'}
+      <p class="error">Thumbnail analysis failed: {thumbAi.error}</p>
+    {:else if !thumbAi}
+      <p class="muted">Not analysed yet. This calls a vision model and costs money, so it only runs when you ask.</p>
+    {:else}
+      <ul class="attr-list">
+        {#each rawEntries(thumbAi) as [k, v] (k)}
+          <li class="attr"><span class="muted">{k}</span> <b class="mono">{fmt(v)}</b></li>
+        {/each}
+      </ul>
+      <p class="muted">Analysed {shortDate(thumbAi.updated_at)} · re-runs only if the thumbnail image changes.</p>
+    {/if}
+  </section>
+
+  <section>
+    <div class="tab-bar flush">
+      <h2 class="grow">Title semantics (AI)</h2>
+      <button
+        class="mini ai tab-bar-action"
+        disabled={enrichActive(titleAi)}
+        on:click={() => enrich('title')}
+      >
+        ✨ {titleAi && titleAi.state === 'done' ? 'Re-analyse' : 'Analyse'} title with AI
+      </button>
+    </div>
+    {#if enrichActive(titleAi)}
+      <p class="processing">Analysing the title…</p>
+    {:else if titleAi && titleAi.state === 'error'}
+      <p class="error">Title analysis failed: {titleAi.error}</p>
+    {:else if !titleAi}
+      <p class="muted">Not analysed yet. This calls an LLM and costs money, so it only runs when you ask.</p>
+    {:else}
+      <ul class="attr-list">
+        {#each rawEntries(titleAi) as [k, v] (k)}
+          <li class="attr"><span class="muted">{k}</span> <b class="mono">{fmt(v)}</b></li>
+        {/each}
+      </ul>
+      <p class="muted">Analysed {shortDate(titleAi.updated_at)} · re-runs only if the title changes.</p>
     {/if}
   </section>
 
