@@ -10,6 +10,27 @@ unstable: breaking changes may land in any minor release.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-15
+
+Fixes a competitor channel registration that silently never collected when the
+queue broker was unreachable.
+
+### Fixed
+
+- **A failed backfill enqueue is no longer silent** — the channel row is
+  committed before the job is enqueued, so a broker that is down left the
+  channel in its initial `pending` state, reporting "Collecting uploads… 0/?"
+  while nothing collected and nothing retried. The failure is now recorded on
+  the channel (`backfill_state="error"`) and reported to the caller.
+- **A channel whose collection never ran is no longer stranded** — global dedup
+  keyed off the channel's mere existence, and detaching preserves the row, so
+  re-adding a channel left in `pending`/`error` reported a collection that never
+  happened. Dedup now skips only a channel that actually finished collecting.
+- **`POST /api/projects/{id}/channels` answers 503** when the queue is
+  unreachable, instead of an unhandled 500.
+- **`primocut competitors add`** reports an unreachable queue instead of a
+  traceback, and no longer claims "no new collection" when it re-enqueues one.
+
 ## [0.2.0] - 2026-07-15
 
 Phase 2 — competitor channel modeling. Adds projects, continuous collection from
@@ -99,6 +120,7 @@ architecture (CLI, worker, jobs, web API and web UI).
   and job timeout.
 - **Resilience** — retry with backoff and transient-error classification.
 
-[Unreleased]: https://github.com/dotenvi/primocut/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/dotenvi/primocut/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/dotenvi/primocut/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/dotenvi/primocut/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dotenvi/primocut/releases/tag/v0.1.0
