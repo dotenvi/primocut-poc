@@ -10,6 +10,61 @@ unstable: breaking changes may land in any minor release.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-15
+
+Phase 2 — competitor channel modeling. Adds projects, continuous collection from
+the YouTube Data API v3, a deterministic metrics engine, and opt-in LLM
+enrichment of packaging and comments. Requires a YouTube Data API v3 key.
+
+### Added
+
+- **Projects and competitor channels** — competitor channels are global entities
+  linked to projects via M:N, so a channel shared by two projects is collected
+  once and its metrics computed once, while niche-level reports stay scoped per
+  project. Detaching keeps all history; a channel orphaned from every project is
+  deactivated, never deleted.
+- **YouTube client** — quota-accounted YouTube Data API v3 client (public data
+  only): channel resolution from URL/@handle/ID, video and channel statistics,
+  paged top comments, and thumbnail content hashing.
+- **Continuous collection** — backfill of the last 120 uploads per new channel,
+  then snapshots daily for every video and every 6h for videos younger than 7
+  days, with packaging-change detection by title string and thumbnail content
+  hash. Runs as a scheduler process (`primocut scheduler`) over rq-scheduler.
+- **Metrics engine** — deterministic and LLM-free: outlier score against the
+  channel median with separate Shorts/long-form baselines, configurable brackets,
+  and provisional/insufficient-data guards; views-per-hour from snapshot deltas;
+  resurgence alerts; packaging before/after impact; engagement and cadence; and
+  per-project conditional distributions of packaging attributes behind a
+  minimum-occurrence guard.
+- **Metrics dashboards** (Web API) — `GET /api/projects/{id}/dashboard`,
+  `GET /api/channels/{id}/dashboard` and `GET /api/channels/{id}/videos/{id}`,
+  assembled on read with no stored scores.
+- **AI packaging enrichment** (opt-in — costs LLM) — structured thumbnail
+  attributes via a vision model and title semantics via a cheap model, cached by
+  content hash and shared across projects, triggered per video or as a batch over
+  a project's definitive outliers. The model observes; the code derives the
+  booleans the pattern math reads.
+- **Comments** — top-liked comments collected automatically once a video is a
+  definitive outlier (quota only, no LLM); the synthesis pass is manual and
+  reports recurring themes, sentiment and the audience's explicit requests, which
+  the project dashboard aggregates into a ranked demand list ordered by how many
+  videos asked. Every quote shown is a real comment: the model returns indices,
+  never text.
+- **CLI** — `projects`, `competitors` and `metrics` sub-apps, plus `scheduler`.
+- **Web UI** (Svelte) — competitors section with the niche, channel and video
+  dashboards, project switcher, outlier tables, sparklines, and the opt-in AI
+  panels. Methodology guards are surfaced rather than hidden.
+- **Configuration** — YouTube key and collection windows, the two snapshot cron
+  schedules, the metrics-engine thresholds, and per-pass model overrides.
+
+### Changed
+
+- **`primocut doctor`** — adds an eighth check that validates
+  `PRIMOCUT_YOUTUBE_API_KEY` with a real 1-unit call. It now **fails when the key
+  is unset**, consistent with the LLM provider key.
+- **LLM layer** — `select()` accepts images and a per-call model override for the
+  enrichment passes. The topics path is unchanged.
+
 ## [0.1.0] - 2026-07-14
 
 First tagged release. Establishes the end-to-end pipeline and the multi-layer
@@ -44,5 +99,6 @@ architecture (CLI, worker, jobs, web API and web UI).
   and job timeout.
 - **Resilience** — retry with backoff and transient-error classification.
 
-[Unreleased]: https://github.com/dotenvi/primocut/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/dotenvi/primocut/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/dotenvi/primocut/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dotenvi/primocut/releases/tag/v0.1.0
