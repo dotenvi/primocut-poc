@@ -251,10 +251,16 @@ class VideoAttributesRow(Base):
     """Structured attributes derived from a video's packaging, keyed by source.
 
     `source="syntactic"` holds the deterministic title features (regex/heuristic,
-    no LLM); `title_llm`/`thumbnail_llm` are reserved for the opt-in enrichment
-    phase. `content_hash` is the hash of the analysed content (the title for the
-    syntactic source) so a row is recomputed only when the content changes and can
-    be shared across projects. Scores are never stored here — only raw attributes.
+    no LLM); `title_llm`/`thumbnail_llm` hold the opt-in AI enrichment.
+    `content_hash` is the hash of the analysed content — the title for the
+    syntactic/title sources, the thumbnail's IMAGE BYTES for the thumbnail one —
+    so a row is recomputed only when the content changes and can be shared across
+    projects. Scores are never stored here — only raw attributes (plus the boolean
+    facets derived from them, which the pattern distributions read).
+
+    `state`/`error` exist for the enrichment, whose LLM call is asynchronous: they
+    let the UI poll a row the way it polls a channel's backfill. The `"done"`
+    default keeps every deterministic (syntactic) row correct with no backfill.
     """
 
     __tablename__ = "video_attributes"
@@ -269,4 +275,6 @@ class VideoAttributesRow(Base):
     source: Mapped[str] = mapped_column(String)  # "syntactic" | "title_llm" | "thumbnail_llm"
     attributes: Mapped[dict] = mapped_column(JSON, default=dict)
     content_hash: Mapped[str] = mapped_column(String, default="")
+    state: Mapped[str] = mapped_column(String, default="done")  # "running" | "done" | "error"
+    error: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)

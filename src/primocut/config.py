@@ -139,8 +139,18 @@ class Settings(BaseSettings):
     # project only if at least this many outlier videos exhibit it.
     pattern_min_occurrence: int = 15
     # The bracket (multiplier) at/above which a video counts as an outlier for the
-    # per-project pattern distributions.
+    # per-project pattern distributions. Also the batch-enrichment target.
     pattern_outlier_bracket: float = 3.0
+
+    # --- Phase 2: AI packaging enrichment (opt-in — costs LLM) ---
+    # Model overrides for the enrichment calls. EMPTY means "use the selected
+    # provider's configured model" (see llm_provider above), which keeps the
+    # default multi-provider behavior intact. Set one to spend less — e.g.
+    # PRIMOCUT_ENRICH_TITLE_MODEL=claude-haiku-4-5 for the title pass. A model id
+    # is provider-specific, so an override is only valid for the provider in use;
+    # the vision model must support image input.
+    enrich_title_model: str = ""
+    enrich_vision_model: str = ""
 
 
 def get_settings() -> Settings:

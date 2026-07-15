@@ -481,6 +481,8 @@ def upsert_video_attributes(
     source: str,
     attributes: dict,
     content_hash: str,
+    state: str = "done",
+    error: str = "",
 ) -> VideoAttributesRow:
     row = get_video_attributes(s, video_id, source)
     if row is None:
@@ -488,6 +490,35 @@ def upsert_video_attributes(
         s.add(row)
     row.attributes = attributes
     row.content_hash = content_hash
+    row.state = state
+    row.error = error
+    s.flush()
+    return row
+
+
+def set_video_attributes_state(
+    s: Session,
+    video_id: str,
+    source: str,
+    *,
+    state: str,
+    error: str = "",
+    clear_hash: bool = False,
+) -> VideoAttributesRow:
+    """Move a row's enrichment state without touching its attributes.
+
+    Creating the row when it is missing is what lets the UI see a first-ever
+    enrichment go "running". `clear_hash` drops the cache key so a failed video is
+    retried on the next explicit action instead of the failure being cached.
+    """
+    row = get_video_attributes(s, video_id, source)
+    if row is None:
+        row = VideoAttributesRow(video_id=video_id, source=source, attributes={})
+        s.add(row)
+    row.state = state
+    row.error = error
+    if clear_hash:
+        row.content_hash = ""
     s.flush()
     return row
 
