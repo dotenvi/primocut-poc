@@ -2,7 +2,8 @@
 
 Covers: new-channel backfill of 120 videos with is_short/thumbnail_hash,
 dedup across projects (2nd project only links, no re-collection), API-error
-degradation (never crashes), and quota accounting.
+degradation (never crashes), an unreachable queue, the retry of a channel whose
+collection never completed, and quota accounting.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from primocut.db import competitors as crepo
 from primocut.db.session import Database
 from primocut.worker.channel_jobs import backfill_channel
 from primocut.worker.channels import detach_channel, register_channel
+from primocut.worker.queue import QueueUnavailableError
 from primocut.youtube.client import ChannelInfo, VideoInfo, YouTubeError
 
 
@@ -85,6 +87,13 @@ class _FakeQueue:
         return SimpleNamespace(id="rqBF")
 
 
+class _DeadQueue:
+    """A queue whose broker is unreachable — mirrors Redis being down."""
+
+    def enqueue(self, fn, *args, **kwargs):
+        raise ConnectionError("Error 111 connecting to localhost:6379. Connection refused.")
+
+
 def _fake_thumb(url: str) -> bytes:
     return url.encode()  # deterministic bytes → deterministic sha256
 
@@ -147,6 +156,69 @@ def test_register_reactivates_orphaned_channel(tmp_path):
     assert res["existing"] is True and res["reactivated"] is True
     with db.session() as s:
         assert crepo.get_channel(s, "UCchan0000000000000000").active is True
+
+
+def test_register_marks_error_when_the_queue_is_unreachable(tmp_path):
+    """The channel row is committed before the enqueue, so a broker failure must
+    leave a channel reported as failed — never one stuck collecting forever."""
+    db = _db(tmp_path)
+    with db.session() as s:
+        pid = crepo.create_project(s, "P").id
+    client = FakeYouTube(channel=_channel_info(), videos=_videos())
+    import pytest
+
+    with pytest.raises(QueueUnavailableError):
+        register_channel(pid, "@chan", settings=_settings(tmp_path), database=db,
+                         queue=_DeadQueue(), client=client)
+
+    with db.session() as s:
+        ch = crepo.get_channel(s, "UCchan0000000000000000")
+        assert ch.backfill_state == "error"
+        assert "6379" in ch.backfill_error  # the broker failure is reported
+        assert ch.backfill_rq_job_id is None
+
+
+def test_register_retries_the_backfill_of_a_never_collected_channel(tmp_path):
+    """Global dedup must not strand a channel whose collection never ran: a
+    re-registration re-enqueues it instead of reporting it as already collected."""
+    db = _db(tmp_path)
+    with db.session() as s:
+        pid = crepo.create_project(s, "P").id
+    client = FakeYouTube(channel=_channel_info(), videos=_videos())
+    import pytest
+
+    with pytest.raises(QueueUnavailableError):  # broker down → left in "error"
+        register_channel(pid, "@chan", settings=_settings(tmp_path), database=db,
+                         queue=_DeadQueue(), client=client)
+
+    queue = _FakeQueue()  # broker back up → same reference, same project
+    res = register_channel(pid, "@chan", settings=_settings(tmp_path), database=db,
+                           queue=queue, client=client)
+
+    assert res["existing"] is True and res["backfill"] == "queued"
+    assert queue.calls[0][0] is backfill_channel
+    with db.session() as s:
+        ch = crepo.get_channel(s, "UCchan0000000000000000")
+        assert ch.backfill_state == "queued" and ch.backfill_rq_job_id == "rqBF"
+        assert ch.backfill_error is None  # the previous failure is cleared
+        assert crepo.count_channel_projects(s, "UCchan0000000000000000") == 1  # no dup link
+
+
+def test_register_does_not_retry_an_already_collected_channel(tmp_path):
+    """A finished collection is never re-run — that is the point of the dedup."""
+    db = _db(tmp_path)
+    with db.session() as s:
+        pid = crepo.create_project(s, "P").id
+        crepo.upsert_channel(s, channel_id="UCchan0000000000000000",
+                             uploads_playlist_id="UUchan", backfill_state="done")
+    client = FakeYouTube(channel=_channel_info(), videos=_videos())
+    queue = _FakeQueue()
+
+    res = register_channel(pid, "@chan", settings=_settings(tmp_path), database=db,
+                           queue=queue, client=client)
+
+    assert res["existing"] is True and res["backfill"] == "skipped"
+    assert queue.calls == []
 
 
 def test_register_missing_project_raises(tmp_path):

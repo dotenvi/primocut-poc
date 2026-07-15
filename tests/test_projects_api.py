@@ -32,6 +32,13 @@ class _FakeQueue:
         return SimpleNamespace(id="rq1")
 
 
+class _DeadQueue:
+    """A queue whose broker is unreachable — mirrors Redis being down."""
+
+    def enqueue(self, fn, *args, **kwargs):
+        raise ConnectionError("Error 111 connecting to localhost:6379. Connection refused.")
+
+
 class _FakeYouTube:
     def __init__(self, channel_id="UCchan0000000000000000"):
         self._channel_id = channel_id
@@ -132,6 +139,21 @@ def test_add_existing_channel_dedups_no_enqueue(tmp_path):
     assert queue2.calls == []
     with db.session() as s:
         assert crepo.count_channel_projects(s, "UCchan0000000000000000") == 2
+
+
+def test_add_channel_unreachable_queue_503(tmp_path):
+    """A broker that is down is a transient infrastructure failure, not a bad
+    request: it must be reported as such instead of a generic 500."""
+    db = _db(tmp_path)
+    c = _client(db, queue=_DeadQueue())
+    pid = c.post("/api/projects", json={"name": "P"}).json()["id"]
+
+    r = c.post(f"/api/projects/{pid}/channels", json={"url": "@chan"})
+
+    assert r.status_code == 503
+    # The registration is reported as failed rather than silently collecting.
+    r = c.get(f"/api/projects/{pid}/channels")
+    assert r.json()[0]["backfill"]["state"] == "error"
 
 
 def test_add_channel_missing_project_404(tmp_path):
