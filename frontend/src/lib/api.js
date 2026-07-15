@@ -36,8 +36,10 @@ export const api = {
   projectDashboard: (pid) => req('GET', `/projects/${pid}/dashboard`),
   channelDashboard: (cid) => req('GET', `/channels/${cid}/dashboard`),
   competitorVideo: (cid, vid) => req('GET', `/channels/${cid}/videos/${vid}`),
-  // Opt-in AI enrichment (costs an LLM call): kind is 'thumbnail' or 'title'.
-  enrichVideo: (cid, vid, kind) => req('POST', `/channels/${cid}/videos/${vid}/enrich`, { kind }),
+  // Opt-in AI enrichment (costs an LLM call): kind is 'thumbnail', 'title' or
+  // 'comments'. `regenerate` (comments only) re-fetches them before synthesising.
+  enrichVideo: (cid, vid, kind, regenerate = false) =>
+    req('POST', `/channels/${cid}/videos/${vid}/enrich`, { kind, regenerate }),
   enrichProject: (pid, kind) => req('POST', `/projects/${pid}/enrich`, { kind }),
 }
 

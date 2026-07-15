@@ -24,16 +24,20 @@
   onDestroy(() => clearInterval(timer))
 
   // The enrichment runs on the queue, so poll while a call is in flight — and
-  // stop as soon as none is, like the channel backfill polling.
-  $: running = data && ['title_llm', 'thumbnail_llm'].some((s) => enrichActive(data.attributes[s]))
+  // stop as soon as none is, like the channel backfill polling. The comment
+  // synthesis carries the same state envelope, so it polls with the same predicate.
+  $: running =
+    data &&
+    (['title_llm', 'thumbnail_llm'].some((s) => enrichActive(data.attributes[s])) ||
+      enrichActive(data.comment_synthesis))
   $: if (!running) {
     clearInterval(timer)
     timer = null
   }
 
-  async function enrich(kind) {
+  async function enrich(kind, regenerate = false) {
     try {
-      await api.enrichVideo(cid, vid, kind)
+      await api.enrichVideo(cid, vid, kind, regenerate)
       await load()
       if (!timer) timer = setInterval(load, 2000)
     } catch (e) {
@@ -45,6 +49,11 @@
   $: syntactic = data && data.attributes.syntactic
   $: titleAi = data && data.attributes.title_llm
   $: thumbAi = data && data.attributes.thumbnail_llm
+  $: synth = data && data.comment_synthesis
+  // Comments are collected automatically, but only for definitive outliers — so
+  // "none yet" is the normal state for most videos, not a failure.
+  $: comments = data && data.comments
+  $: canSynthesise = comments && comments.collected > 0
 
   // The derived boolean facets (thumb_*/title_*) exist for the pattern
   // distributions; what a human wants to see here is the raw observation.
@@ -195,6 +204,102 @@
         {/each}
       </ul>
       <p class="muted">Analysed {shortDate(titleAi.updated_at)} · re-runs only if the title changes.</p>
+    {/if}
+  </section>
+
+  <section>
+    <div class="tab-bar flush">
+      <h2 class="grow">Audience comments</h2>
+      {#if canSynthesise}
+        <button
+          class="mini ai tab-bar-action"
+          disabled={enrichActive(synth)}
+          on:click={() => enrich('comments')}
+        >
+          ✨ {synth && synth.state === 'done' ? 'Re-synthesise' : 'Synthesise'} comments with AI
+        </button>
+        {#if synth && synth.state === 'done'}
+          <button class="mini" disabled={enrichActive(synth)} on:click={() => enrich('comments', true)}>
+            Regenerate
+          </button>
+        {/if}
+      {/if}
+    </div>
+
+    {#if comments.state === 'disabled'}
+      <p class="muted">Comments are disabled on this video — there is nothing to collect.</p>
+    {:else if comments.state === 'error'}
+      <p class="error">Comment collection failed: {comments.error} — it retries on the next cycle.</p>
+    {:else if comments.state === 'done' && !canSynthesise}
+      <p class="muted">Nobody commented on this video — there is nothing to synthesise.</p>
+    {:else if !canSynthesise}
+      <p class="muted">
+        No comments collected yet. They are fetched automatically once the video becomes a
+        definitive outlier.
+      </p>
+    {:else}
+      <p class="muted">
+        {comments.collected} top {comments.collected === 1 ? 'comment' : 'comments'} collected
+        automatically (no AI cost).
+      </p>
+
+      {#if enrichActive(synth)}
+        <p class="processing">Synthesising the comments…</p>
+      {:else if synth && synth.state === 'error'}
+        <p class="error">Comment synthesis failed: {synth.error}</p>
+      {:else if !synth}
+        <p class="muted">
+          Not synthesised yet. This calls an LLM and costs money, so it only runs when you ask.
+        </p>
+      {:else}
+        <p>
+          <b>Sentiment:</b> <span class="badge st-done">{synth.values.sentiment}</span>
+          {synth.values.sentiment_note}
+        </p>
+
+        <h3>Recurring themes</h3>
+        {#if synth.values.themes.length === 0}
+          <p class="muted">No recurring theme identified.</p>
+        {:else}
+          <ul class="list">
+            {#each synth.values.themes as t (t.theme)}
+              <li class="row">
+                <div class="grow">
+                  <b>{t.theme}</b>
+                  {#if t.example && t.example.text}
+                    <div class="muted">“{t.example.text}” — {t.example.author}</div>
+                  {/if}
+                </div>
+                <span class="mono muted">{t.mentions}×</span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        <h3>What the audience asked for</h3>
+        {#if synth.values.requests.length === 0}
+          <p class="muted">No explicit request in these comments.</p>
+        {:else}
+          <ul class="list">
+            {#each synth.values.requests as r (r.type + r.value_key)}
+              <li class="row">
+                <div class="grow">
+                  <span class="tag">{r.type}</span> <b>{r.value}</b>
+                  {#if r.example && r.example.text}
+                    <div class="muted">“{r.example.text}” — {r.example.author}</div>
+                  {/if}
+                </div>
+                <span class="mono muted">{r.mentions}×</span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        <p class="muted">
+          Synthesised {shortDate(synth.updated_at)} over {synth.values.comments_analysed} comments ·
+          re-runs only if the collected comments change. Every quote is a real comment.
+        </p>
+      {/if}
     {/if}
   </section>
 

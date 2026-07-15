@@ -26,8 +26,9 @@
     notice = ''
     try {
       const r = await api.enrichProject(pid, kind)
+      const verb = kind === 'comments' ? 'Synthesising the comments of' : `Enriching the ${kind} of`
       notice = r.videos
-        ? `Enriching the ${kind} of ${r.videos} outlier${r.videos === 1 ? '' : 's'} — ` +
+        ? `${verb} ${r.videos} outlier${r.videos === 1 ? '' : 's'} — ` +
           'open a video to follow it. Videos analysed before are not charged again.'
         : 'No definitive outlier to enrich yet.'
     } catch (e) {
@@ -38,6 +39,17 @@
   // Channels are linked but nothing is scored yet — the snapshots have not
   // accumulated. Say so instead of rendering an empty niche view.
   $: collecting = data && data.channels.length > 0 && data.outliers.length === 0
+
+  const REQUEST_LABEL = {
+    guest: 'Guests to book',
+    topic: 'Subjects to cover',
+    format: 'Format asks',
+    other: 'Other asks',
+  }
+  // Only the types the audience actually asked for get a column.
+  $: requestTypes = data
+    ? Object.entries(data.audience_requests.by_type).filter(([, rows]) => rows.length > 0)
+    : []
 
   const videoHref = (r) => `#/projects/${pid}/channels/${r.channel_id}/videos/${r.video_id}`
 
@@ -114,6 +126,44 @@
             {/each}
           </tbody>
         </table>
+      </div>
+    {/if}
+  </section>
+
+  <section>
+    <div class="tab-bar flush">
+      <h2 class="grow">Audience requests</h2>
+      <button class="mini ai tab-bar-action" on:click={() => enrich('comments')}>
+        ✨ Synthesise outlier comments
+      </button>
+    </div>
+    {#if requestTypes.length === 0}
+      <p class="muted">
+        No comments synthesised yet. Comments are collected automatically for the outliers above;
+        reading them costs an LLM call, so it only runs when you ask.
+      </p>
+    {:else}
+      <p class="muted">
+        What the audience explicitly asked for across {data.audience_requests.videos_synthesised}
+        synthesised {data.audience_requests.videos_synthesised === 1 ? 'video' : 'videos'}, ranked
+        by how many videos asked.
+      </p>
+      <div class="req-cols">
+        {#each requestTypes as [type, rows] (type)}
+          <article class="card">
+            <h3>{REQUEST_LABEL[type]}</h3>
+            <ul class="list">
+              {#each rows as r (r.value)}
+                <li class="row">
+                  <span class="grow">{r.value}</span>
+                  <span class="mono muted">
+                    {r.videos} {r.videos === 1 ? 'video' : 'videos'} · {r.mentions}×
+                  </span>
+                </li>
+              {/each}
+            </ul>
+          </article>
+        {/each}
       </div>
     {/if}
   </section>

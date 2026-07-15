@@ -435,6 +435,10 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .tile-row:last-child { border-bottom: 0; }
 
+/* Audience requests — one column per request type the audience actually used. */
+.req-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.req-cols h3 { margin: 0 0 4px; font-size: 1.05rem; }
+
 /* Snapshot time series — hand-built SVG, no chart library. */
 .sparkline { width: 100%; display: block; background: var(--inset); border-radius: var(--r-card); }
 .sparkline-area { fill: var(--tally-dim); stroke: none; }
