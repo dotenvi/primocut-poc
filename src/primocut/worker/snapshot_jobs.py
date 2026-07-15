@@ -6,7 +6,9 @@ A single reusable function drives both cadences (see `worker/scheduler.py`):
 
 Each cycle also detects newly published videos (top of the uploads playlist) and
 packaging changes (title string; thumbnail by BYTE hash — the URL is not trusted)
-against the last-known state. Everything is deterministic and quota-accounted.
+against the last-known state, and collects the top comments of the videos that are
+now definitive outliers. Everything is deterministic and quota-accounted — nothing
+here ever calls an LLM (guideline 9).
 
 Resilience (PRIMOCUT.md guideline 12): channels are processed in isolation — a
 failure on one is logged and the cycle moves on to the next; it never aborts the
@@ -23,6 +25,7 @@ from ..config import Settings, get_settings
 from ..logging_conf import get_logger
 from ..youtube.client import YouTubeClient
 from ..youtube.thumbnails import fetch_thumbnail_bytes, thumbnail_hash
+from .comment_collection import collect_outlier_comments
 
 logger = get_logger(__name__)
 
@@ -84,21 +87,34 @@ def snapshot_cycle(
             logger.error("snapshot(%s): channel %s failed: %s", scope, cid, exc)
             continue
 
+    target_ids = [cid for cid, _ in targets]
+
     # Persistence step (mandated by the data model): refresh the syntactic title
     # attributes for the processed channels and fill packaging impact for events
     # whose window has elapsed. Content-hash gated + idempotent; isolated so a
     # failure here never affects the collected snapshots.
     _persist_metrics_artifacts(
-        [cid for cid, _ in targets], settings=settings, database=database, now=now
+        target_ids, settings=settings, database=database, now=now
+    )
+
+    # Comment collection: a sibling step, not part of the one above, because that
+    # one is deterministic-and-offline while this spends quota. It reads the
+    # snapshots just written, so a video that crossed the threshold this cycle is
+    # collected in the same pass. Costs no LLM call (guideline 9) and is isolated
+    # internally, so it never breaks the cycle. Kept BEFORE the quota log so the
+    # comment units fold into the cycle's reported total.
+    comments_collected = collect_outlier_comments(
+        target_ids, settings=settings, database=database, client=client, now=now
     )
 
     logger.info(
         "snapshot(%s) done: %d channel(s), %d video(s), %d packaging change(s), "
-        "%d quota unit(s)",
+        "%d comment set(s), %d quota unit(s)",
         scope,
         channels_done,
         videos_done,
         packaging_changes,
+        comments_collected,
         client.units_used,
     )
     return {
@@ -106,6 +122,7 @@ def snapshot_cycle(
         "channels": channels_done,
         "videos": videos_done,
         "packaging_changes": packaging_changes,
+        "comments": comments_collected,
         "quota_units": client.units_used,
     }
 
