@@ -4,14 +4,23 @@ Runs only for a channel seen for the first time (global dedup): it lists the
 last N uploads, fetches their metadata in batches (quota-accounted) and stores
 them in `competitor_videos` with an initial `is_short` and `thumbnail_hash`.
 
+It also records the channel's **first snapshot**, so the dashboards have data as
+soon as a channel is added instead of waiting for the first scheduled cycle (up
+to 24h away). The video counters cost nothing extra — they ride along in the same
+`videos.list` response the backfill already makes; only the channel statistics
+add a call (1 unit). Every later snapshot comes from the cycle in
+`worker/snapshot_jobs.py`, which remains the sole continuous collector.
+
 Resilience (DEVELOPMENT.md §4): any API/thumbnail failure degrades — the channel
 is marked `backfill_state="error"` with the message logged, and the worker is
-never crashed. Progress is written incrementally so the existing polling can
-follow it.
+never crashed. The channel snapshot is isolated on top of that: losing it never
+costs the uploads, which are the point of the backfill. Progress is written
+incrementally so the existing polling can follow it.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Callable
 
 from ..config import Settings, get_settings
@@ -30,8 +39,10 @@ def backfill_channel(
     database=None,
     client: YouTubeClient | None = None,
     thumbnail_fetcher: Callable[[str], bytes] = fetch_thumbnail_bytes,
+    now: datetime | None = None,
 ) -> dict:
-    """Collect the last `limit` uploads of `channel_id` into competitor_videos."""
+    """Collect the last `limit` uploads of `channel_id` into competitor_videos,
+    plus the channel's first snapshot."""
     settings = settings or get_settings()
     if database is None:
         from ..db import get_database
@@ -40,6 +51,8 @@ def backfill_channel(
     if client is None:
         client = YouTubeClient.from_settings(settings)
     limit = limit if limit is not None else settings.youtube_backfill_limit
+    # One reading, one instant: every row this job writes shares this timestamp.
+    now = now or datetime.now(timezone.utc)
 
     from ..db import competitors as crepo
 
@@ -74,8 +87,20 @@ def backfill_channel(
                     thumbnail_url=video.thumbnail_url,
                     thumbnail_hash=digest,
                 )
+                crepo.add_video_snapshot(
+                    s,
+                    video_id=video.video_id,
+                    captured_at=now,
+                    views=video.view_count,
+                    likes=video.like_count,
+                    comments=video.comment_count,
+                )
                 done += 1
                 crepo.set_backfill(s, channel_id, backfill_done=done)
+
+        _record_channel_snapshot(
+            channel_id, now=now, database=database, client=client
+        )
 
         with database.session() as s:
             crepo.set_backfill(s, channel_id, backfill_state="done")
@@ -98,3 +123,30 @@ def backfill_channel(
             "error": str(exc),
             "quota_units": client.units_used,
         }
+
+
+def _record_channel_snapshot(channel_id: str, *, now, database, client) -> None:
+    """Record the channel's first statistics snapshot (subscribers/views/videos).
+
+    Isolated from the collection above: this is the only part of the backfill that
+    spends a call of its own, and the uploads must survive it failing.
+    """
+    from ..db import competitors as crepo
+
+    try:
+        stats = client.get_channels_stats([channel_id])
+        if not stats:
+            logger.warning("No statistics returned for %s; snapshot skipped", channel_id)
+            return
+        st = stats[0]
+        with database.session() as s:
+            crepo.add_channel_snapshot(
+                s,
+                channel_id=channel_id,
+                captured_at=now,
+                subscribers=st.subscribers,
+                total_views=st.total_views,
+                video_count=st.video_count,
+            )
+    except Exception as exc:  # never let the snapshot break the backfill
+        logger.error("First channel snapshot failed for %s: %s", channel_id, exc)
