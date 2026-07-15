@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { api } from '../lib/api.js'
   import OutlierTable from '../components/OutlierTable.svelte'
+  import FormatTabs from '../components/FormatTabs.svelte'
   import { compactNumber, pct, vphLabel, multiplier, shortDate, WEEKDAYS } from '../lib/format.js'
 
   export let pid
@@ -9,6 +10,8 @@
 
   let data = null // null while loading
   let error = ''
+  let outlierFmt = 'long'
+  let resurgenceFmt = 'long'
 
   async function load() {
     try {
@@ -95,9 +98,25 @@
 
     <article class="card tile">
       <h3>Engagement</h3>
-      <p class="muted">Median across the channel's videos.</p>
-      <div class="tile-row"><span>Like rate</span><b class="mono">{pct(data.engagement.like_rate_median)}</b></div>
-      <div class="tile-row"><span>Comment rate</span><b class="mono">{pct(data.engagement.comment_rate_median)}</b></div>
+      <p class="muted">Median per format, across the channel's videos.</p>
+      <div class="tile-row">
+        <span>Like rate</span>
+        <b class="mono">
+          {pct(data.engagement.long.like_rate_median)}
+          <span class="muted">long</span> ·
+          {pct(data.engagement.short.like_rate_median)}
+          <span class="muted">short</span>
+        </b>
+      </div>
+      <div class="tile-row">
+        <span>Comment rate</span>
+        <b class="mono">
+          {pct(data.engagement.long.comment_rate_median)}
+          <span class="muted">long</span> ·
+          {pct(data.engagement.short.comment_rate_median)}
+          <span class="muted">short</span>
+        </b>
+      </div>
     </article>
   </section>
 
@@ -130,7 +149,11 @@
 
   <section>
     <h2>Outliers</h2>
-    <OutlierTable rows={data.outliers} {pid} {cid} />
+    <FormatTabs
+      bind:value={outlierFmt}
+      counts={{ long: data.outliers.long.length, short: data.outliers.short.length }}
+    />
+    <OutlierTable rows={data.outliers[outlierFmt]} {pid} {cid} />
   </section>
 
   <section>
@@ -156,11 +179,15 @@
 
   <section>
     <h2>Resurgence alerts</h2>
-    {#if data.resurgences.length === 0}
+    <FormatTabs
+      bind:value={resurgenceFmt}
+      counts={{ long: data.resurgences.long.length, short: data.resurgences.short.length }}
+    />
+    {#if data.resurgences[resurgenceFmt].length === 0}
       <p class="muted">No resurgence detected.</p>
     {:else}
       <ul class="list">
-        {#each data.resurgences as r (r.video_id)}
+        {#each data.resurgences[resurgenceFmt] as r (r.video_id)}
           <li class="row">
             <div class="grow"><a href={videoHref(r)}>{r.title || r.video_id}</a></div>
             <span class="mono">{multiplier(r.ratio)} its recent average</span>

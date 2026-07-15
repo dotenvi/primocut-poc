@@ -32,7 +32,6 @@
             <td class="num muted">{i + 1}</td>
             <td>
               <a href={videoHref(r)}>{r.title || r.video_id}</a>
-              {#if r.is_short}<span class="tag">short</span>{/if}
               {#if r.provisional}<span class="status status-provisional">provisional</span>{/if}
             </td>
             {#if showChannel}<td class="muted">{r.channel_title || r.channel_id}</td>{/if}

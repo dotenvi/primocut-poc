@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { api } from '../lib/api.js'
   import OutlierTable from '../components/OutlierTable.svelte'
+  import FormatTabs from '../components/FormatTabs.svelte'
   import { pct, vphLabel, multiplier, shortDate } from '../lib/format.js'
 
   export let pid
@@ -9,6 +10,9 @@
   let data = null // null while loading
   let error = ''
   let notice = ''
+  let outlierFmt = 'long'
+  let patternFmt = 'long'
+  let resurgenceFmt = 'long'
 
   async function load() {
     try {
@@ -37,8 +41,13 @@
   }
 
   // Channels are linked but nothing is scored yet — the snapshots have not
-  // accumulated. Say so instead of rendering an empty niche view.
-  $: collecting = data && data.channels.length > 0 && data.outliers.length === 0
+  // accumulated. Say so instead of rendering an empty niche view. Neither
+  // format having an outlier is what "nothing scored yet" means.
+  $: collecting =
+    data &&
+    data.channels.length > 0 &&
+    data.outliers.long.length === 0 &&
+    data.outliers.short.length === 0
 
   const REQUEST_LABEL = {
     guest: 'Guests to book',
@@ -79,7 +88,11 @@
 
   <section>
     <h2>Outliers (niche)</h2>
-    <OutlierTable rows={data.outliers} {pid} showChannel={true} />
+    <FormatTabs
+      bind:value={outlierFmt}
+      counts={{ long: data.outliers.long.length, short: data.outliers.short.length }}
+    />
+    <OutlierTable rows={data.outliers[outlierFmt]} {pid} showChannel={true} />
   </section>
 
   <section>
@@ -93,12 +106,16 @@
       </button>
     </div>
     {#if notice}<p class="collecting">{notice}</p>{/if}
-    {#if data.patterns.length === 0}
+    <FormatTabs
+      bind:value={patternFmt}
+      counts={{ long: data.patterns.long.length, short: data.patterns.short.length }}
+    />
+    {#if data.patterns[patternFmt].length === 0}
       <p class="muted">Not enough definitive outliers yet to report patterns.</p>
     {:else}
       <p class="muted">
-        Packaging attributes among definitive outliers vs. the project population. Each source is
-        measured against the videos analysed for it, so AI patterns appear only once enough
+        Packaging attributes among definitive outliers vs. the same-format population. Each source
+        is measured against the videos analysed for it, so AI patterns appear only once enough
         outliers have been enriched.
       </p>
       <div class="otable-wrap">
@@ -114,7 +131,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each data.patterns as p (p.source + p.attribute)}
+            {#each data.patterns[patternFmt] as p (p.source + p.attribute)}
               <tr>
                 <td>{p.attribute}</td>
                 <td><span class="tag">{p.source}</span></td>
@@ -193,11 +210,15 @@
 
   <section>
     <h2>Resurgence alerts</h2>
-    {#if data.resurgences.length === 0}
+    <FormatTabs
+      bind:value={resurgenceFmt}
+      counts={{ long: data.resurgences.long.length, short: data.resurgences.short.length }}
+    />
+    {#if data.resurgences[resurgenceFmt].length === 0}
       <p class="muted">No resurgence detected.</p>
     {:else}
       <ul class="list">
-        {#each data.resurgences as r (r.video_id)}
+        {#each data.resurgences[resurgenceFmt] as r (r.video_id)}
           <li class="row">
             <div class="grow">
               <a href={videoHref(r)}>{r.title || r.video_id}</a>
