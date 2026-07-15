@@ -103,7 +103,7 @@ def _is_definitive_outlier(sc: _Scored, *, threshold: float) -> bool:
     )
 
 
-def _outlier_payload(sc: _Scored, *, with_channel: bool = False) -> dict:
+def _outlier_payload(sc: _Scored, *, with_channel: bool = False, vph: float | None = None) -> dict:
     out = {
         "video_id": sc.video_id,
         "title": sc.title,
@@ -115,6 +115,7 @@ def _outlier_payload(sc: _Scored, *, with_channel: bool = False) -> dict:
     }
     if with_channel:
         out["channel_id"] = sc.channel_id
+        out["current_vph"] = vph
     return out
 
 
@@ -249,6 +250,21 @@ def channel_dashboard(session, channel_id, *, settings=None, now=None) -> dict |
                 "current_vph": res.current_vph, "recent_avg_vph": res.recent_avg_vph,
             })
 
+    # Packaging log with its persisted before/after impact (same shape as the
+    # project dashboard, scoped to this channel).
+    video_title = {v.video_id: v.title for v in videos}
+    packaging = []
+    for ch in crepo.list_packaging_changes(session, channel_id=channel_id):
+        delta = (
+            ch.vph_after - ch.vph_before
+            if ch.vph_after is not None and ch.vph_before is not None else None
+        )
+        packaging.append({
+            "video_id": ch.video_id, "title": video_title.get(ch.video_id, ""),
+            "field": ch.field, "detected_at": ch.detected_at.isoformat(),
+            "vph_before": ch.vph_before, "vph_after": ch.vph_after, "delta": delta,
+        })
+
     return {
         "channel": {
             "channel_id": channel.channel_id, "title": channel.title, "handle": channel.handle,
@@ -271,6 +287,7 @@ def channel_dashboard(session, channel_id, *, settings=None, now=None) -> dict |
             "by_hour": {str(k): v for k, v in sorted(cad.by_hour.items())},
             "duration_by_format": cad.duration_by_format,
         },
+        "packaging": packaging,
         "resurgences": resurgences,
     }
 
@@ -287,6 +304,11 @@ def project_dashboard(session, project_id, *, settings=None, now=None) -> dict |
 
     channels = crepo.list_project_channels(session, project_id)
     channel_title = {c.channel_id: c.title for c in channels}
+    video_title = {
+        v.video_id: v.title
+        for c in channels
+        for v in crepo.list_channel_videos(session, c.channel_id)
+    }
 
     # Score each channel once (channel metrics are project-independent), then merge.
     all_scored: list[_Scored] = []
@@ -324,7 +346,8 @@ def project_dashboard(session, project_id, *, settings=None, now=None) -> dict |
             )
             packaging.append({
                 "video_id": ch.video_id, "channel_id": c.channel_id,
-                "title": channel_title.get(c.channel_id, ""),
+                "title": video_title.get(ch.video_id, ""),
+                "channel_title": channel_title.get(c.channel_id, ""),
                 "field": ch.field, "detected_at": ch.detected_at.isoformat(),
                 "vph_before": ch.vph_before, "vph_after": ch.vph_after, "delta": delta,
             })
@@ -347,7 +370,14 @@ def project_dashboard(session, project_id, *, settings=None, now=None) -> dict |
              "subscribers": (s.subscribers if (s := crepo.latest_channel_snapshot(session, c.channel_id)) else None)}
             for c in channels
         ],
-        "outliers": [_outlier_payload(sc, with_channel=True) | {"channel_title": channel_title.get(sc.channel_id, "")} for sc in ranked],
+        "outliers": [
+            _outlier_payload(
+                sc, with_channel=True,
+                vph=core.current_vph(_snaps(session, sc.video_id),
+                                     window_hours=settings.vph_current_window_hours),
+            ) | {"channel_title": channel_title.get(sc.channel_id, "")}
+            for sc in ranked
+        ],
         "patterns": [
             {"attribute": p.attribute, "outlier_rate": p.outlier_rate,
              "population_rate": p.population_rate, "lift": p.lift,
