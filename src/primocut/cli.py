@@ -272,6 +272,7 @@ def competitors_add(
     from .db import get_database
     from .youtube.client import YouTubeError
     from .worker.channels import register_channel
+    from .worker.queue import QueueUnavailableError
 
     settings = get_settings()
     database = get_database(settings)
@@ -283,15 +284,24 @@ def competitors_add(
     except (YouTubeError, ValueError) as exc:
         console.print(f"[red]Could not register the channel:[/red] {exc}")
         raise typer.Exit(code=1)
+    except QueueUnavailableError as exc:
+        console.print(
+            f"[red]Could not queue the collection:[/red] {exc}\n"
+            f"Is Redis running at {settings.redis_url}? "
+            f"The channel is registered but marked failed — run this command "
+            f"again once the queue is back to collect it."
+        )
+        raise typer.Exit(code=1)
 
-    if result["existing"]:
+    if result["backfill"] == "skipped":
         console.print(
             f"[green]Linked[/green] existing channel {result['channel_id']} "
             f"({result['title']}) — no new collection."
         )
     else:
+        verb = "Re-collecting" if result["existing"] else "Registered"
         console.print(
-            f"[green]Registered[/green] {result['channel_id']} ({result['title']}); "
+            f"[green]{verb}[/green] {result['channel_id']} ({result['title']}); "
             f"backfill queued (rq {result.get('rq_job_id')})."
         )
 
