@@ -16,7 +16,13 @@ from ..config import Settings, get_settings
 from ..db import competitors as crepo
 from . import core
 from .attributes import SOURCE as ATTR_SOURCE
+from .enrichment import SOURCE_THUMBNAIL, SOURCE_TITLE
 from .patterns import conditional_patterns
+
+# Every attribute source a dashboard reads. `syntactic` is always present (it is
+# deterministic and free); the two LLM ones exist only for videos the user chose
+# to enrich, which is exactly why each is measured against its own population.
+ATTR_SOURCES = (ATTR_SOURCE, SOURCE_TITLE, SOURCE_THUMBNAIL)
 
 
 @dataclass
@@ -132,6 +138,55 @@ def _resurgence_for(session, video, *, settings: Settings, now: datetime) -> cor
     )
 
 
+# ------------------------- attributes -------------------------
+
+
+def _attributes_by_source(session, video_id: str) -> dict:
+    """One entry per source, `None` where the video was never analysed for it.
+
+    The enrichment sources also carry their `state`/`error` so the UI can render a
+    run in flight, or a failure, instead of an empty panel.
+    """
+    out: dict[str, dict | None] = {}
+    for source in ATTR_SOURCES:
+        row = crepo.get_video_attributes(session, video_id, source)
+        out[source] = (
+            {"values": row.attributes, "state": row.state, "error": row.error,
+             "updated_at": row.updated_at.isoformat()}
+            if row is not None else None
+        )
+    return out
+
+
+def _patterns_for(session, all_scored: list[_Scored], *, settings: Settings) -> list[dict]:
+    """Conditional distributions, computed once per attribute source.
+
+    Each source's population is restricted to the videos that actually have a row
+    for it — an un-enriched video is *unknown*, not "attribute absent".
+    """
+    threshold = settings.pattern_outlier_bracket
+    video_ids = [sc.video_id for sc in all_scored]
+    out: list[dict] = []
+    for source in ATTR_SOURCES:
+        attrs = crepo.list_video_attributes(session, video_ids, source)
+        population = [attrs[sc.video_id].attributes for sc in all_scored if sc.video_id in attrs]
+        outliers = [
+            attrs[sc.video_id].attributes
+            for sc in all_scored
+            if sc.video_id in attrs and _is_definitive_outlier(sc, threshold=threshold)
+        ]
+        out.extend(
+            {"attribute": p.attribute, "outlier_rate": p.outlier_rate,
+             "population_rate": p.population_rate, "lift": p.lift,
+             "outlier_occurrences": p.outlier_occurrences, "source": p.source}
+            for p in conditional_patterns(
+                population, outliers,
+                min_occurrence=settings.pattern_min_occurrence, source=source,
+            )
+        )
+    return out
+
+
 # ------------------------- video report -------------------------
 
 
@@ -151,7 +206,6 @@ def video_report(session, channel_id, video_id, *, settings=None, now=None) -> d
         if latest is not None else core.Engagement(None, None)
     )
     res = _resurgence_for(session, video, settings=settings, now=now)
-    attrs_row = crepo.get_video_attributes(session, video_id, ATTR_SOURCE)
     changes = crepo.list_packaging_changes(session, video_id=video_id)
 
     outlier = (
@@ -193,9 +247,7 @@ def video_report(session, channel_id, video_id, *, settings=None, now=None) -> d
             "is_resurgent": res.is_resurgent, "ratio": res.ratio,
             "current_vph": res.current_vph, "recent_avg_vph": res.recent_avg_vph,
         },
-        "attributes": (
-            {"source": ATTR_SOURCE, **attrs_row.attributes} if attrs_row is not None else None
-        ),
+        "attributes": _attributes_by_source(session, video_id),
         "packaging_changes": [
             {"field": c.field, "old_value": c.old_value, "new_value": c.new_value,
              "detected_at": c.detected_at.isoformat(),
@@ -292,6 +344,35 @@ def channel_dashboard(session, channel_id, *, settings=None, now=None) -> dict |
     }
 
 
+# ------------------------- project-scoped selection -------------------------
+
+
+def definitive_outlier_ids(session, project_id, *, settings=None, now=None) -> list[str] | None:
+    """The project's definitive outliers — the batch-enrichment target.
+
+    Deliberately the SAME set `_patterns_for` feeds to the distributions: paying an
+    LLM for a video the pattern math never reads would be waste, and a provisional
+    video (< 7 days) may still fall back to normal as its score matures — the
+    content-hash cache would not protect against that, since the score changes but
+    the thumbnail bytes do not. Returns None when the project does not exist.
+    """
+    settings = settings or get_settings()
+    now = _now(now)
+    if crepo.get_project(session, project_id) is None:
+        return None
+
+    threshold = settings.pattern_outlier_bracket
+    out: list[str] = []
+    for c in crepo.list_project_channels(session, project_id):
+        scored, _ = _channel_scores(session, c.channel_id, settings=settings, now=now)
+        out.extend(
+            sc.video_id
+            for sc in scored.values()
+            if _is_definitive_outlier(sc, threshold=threshold)
+        )
+    return out
+
+
 # ------------------------- project dashboard -------------------------
 
 
@@ -321,20 +402,10 @@ def project_dashboard(session, project_id, *, settings=None, now=None) -> dict |
         key=lambda sc: sc.score.score, reverse=True,
     )
 
-    # Conditional distributions: population = project videos with attributes;
-    # outliers = the definitive (non-provisional, >= threshold) subset.
-    threshold = settings.pattern_outlier_bracket
-    project_video_ids = [sc.video_id for sc in all_scored]
-    attrs = crepo.list_video_attributes(session, project_video_ids, ATTR_SOURCE)
-    population_attrs = [attrs[sc.video_id].attributes for sc in all_scored if sc.video_id in attrs]
-    outlier_attrs = [
-        attrs[sc.video_id].attributes
-        for sc in all_scored
-        if sc.video_id in attrs and _is_definitive_outlier(sc, threshold=threshold)
-    ]
-    patterns = conditional_patterns(
-        population_attrs, outlier_attrs, min_occurrence=settings.pattern_min_occurrence
-    )
+    # Conditional distributions, per source: population = the project videos that
+    # have a row for that source; outliers = the definitive (non-provisional,
+    # >= threshold) subset of them.
+    patterns = _patterns_for(session, all_scored, settings=settings)
 
     # Packaging changes across the project's channels, with their persisted impact.
     packaging = []
@@ -378,12 +449,7 @@ def project_dashboard(session, project_id, *, settings=None, now=None) -> dict |
             ) | {"channel_title": channel_title.get(sc.channel_id, "")}
             for sc in ranked
         ],
-        "patterns": [
-            {"attribute": p.attribute, "outlier_rate": p.outlier_rate,
-             "population_rate": p.population_rate, "lift": p.lift,
-             "outlier_occurrences": p.outlier_occurrences}
-            for p in patterns
-        ],
+        "patterns": patterns,
         "packaging": packaging,
         "resurgences": resurgences,
     }
