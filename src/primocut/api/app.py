@@ -134,7 +134,11 @@ def create_app() -> FastAPI:
         )
     )
     app.include_router(
-        build_metrics_router(get_db=get_db, get_settings_dep=get_settings_dep)
+        build_metrics_router(
+            get_db=get_db,
+            get_queue_dep=get_queue_dep,
+            get_settings_dep=get_settings_dep,
+        )
     )
 
     _mount_static(app)

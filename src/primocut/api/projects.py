@@ -30,6 +30,10 @@ class ChannelIn(BaseModel):
     url: str
 
 
+class EnrichIn(BaseModel):
+    kind: str  # "thumbnail" | "title"
+
+
 def _project_dict(row) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -158,6 +162,33 @@ def build_projects_router(
         if data is None:
             raise HTTPException(status_code=404, detail="project not found")
         return data
+
+    @router.post("/projects/{project_id}/enrich", status_code=202)
+    def enrich_project_outliers(
+        project_id: int,
+        body: EnrichIn,
+        db=Depends(get_db),
+        queue=Depends(get_queue_dep),
+        settings=Depends(get_settings_dep),
+    ) -> dict:
+        """Enrich the packaging of this project's definitive outliers with an LLM.
+        Opt-in: costs money, so it runs only from this explicit action
+        (guideline 9). Selection is a pure read; the work goes to the queue."""
+        from ..metrics import service as metrics_service
+        from ..worker.queue import enqueue_enrichment
+
+        with db.session() as s:
+            video_ids = metrics_service.definitive_outlier_ids(
+                s, project_id, settings=settings
+            )
+        if video_ids is None:
+            raise HTTPException(status_code=404, detail="project not found")
+        try:
+            return enqueue_enrichment(
+                video_ids, body.kind, settings=settings, queue=queue
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     @router.delete("/projects/{project_id}/channels/{channel_id}")
     def detach_channel_endpoint(

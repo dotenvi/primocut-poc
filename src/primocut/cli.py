@@ -413,6 +413,50 @@ def metrics_refresh() -> None:
     )
 
 
+@metrics_app.command("enrich")
+def metrics_enrich(
+    project: int | None = typer.Option(None, "--project", "-p", help="Project ID"),
+    video: str | None = typer.Option(None, "--video", "-v", help="A single video ID"),
+    kind: str = typer.Option(..., "--kind", "-k", help="thumbnail | title"),
+) -> None:
+    """Enrich packaging with an LLM (opt-in — this COSTS money).
+
+    Runs inline (no worker needed) over a project's definitive outliers, or over a
+    single video. Videos whose content hash is unchanged are skipped for free.
+    """
+    setup_logging()
+    from .db import get_database
+    from .metrics import service
+    from .worker.enrich_jobs import enrich_videos
+
+    settings = get_settings()
+    database = get_database(settings)
+
+    if (project is None) == (video is None):
+        console.print("[red]Provide either --project or --video.[/red]")
+        raise typer.Exit(code=1)
+
+    if video is not None:
+        video_ids = [video]
+    else:
+        with database.session() as s:
+            video_ids = service.definitive_outlier_ids(s, project, settings=settings)
+        if video_ids is None:
+            console.print(f"[red]Project {project} not found.[/red]")
+            raise typer.Exit(code=1)
+
+    try:
+        result = enrich_videos(video_ids, kind, settings=settings, database=database)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"[green]Enrichment ({result['kind']}):[/green] {result['enriched']} enriched, "
+        f"{result['skipped']} cached, {result['failed']} failed."
+    )
+
+
 @metrics_app.command("show")
 def metrics_show(
     project: int | None = typer.Option(None, "--project", "-p", help="Project ID"),
