@@ -1,22 +1,27 @@
 """Tests for channel registration + backfill (YouTube fully faked, no network).
 
-Covers: new-channel backfill of 120 videos with is_short/thumbnail_hash,
-dedup across projects (2nd project only links, no re-collection), API-error
-degradation (never crashes), an unreachable queue, the retry of a channel whose
-collection never completed, and quota accounting.
+Covers: new-channel backfill of 120 videos with is_short/thumbnail_hash, the
+first channel+video snapshots written by the backfill itself, dedup across
+projects (2nd project only links, no re-collection), API-error degradation
+(never crashes), an unreachable queue, the retry of a channel whose collection
+never completed, and quota accounting.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from primocut.config import Settings
 from primocut.db import competitors as crepo
+from primocut.db.models import ChannelSnapshotRow, VideoSnapshotRow
 from primocut.db.session import Database
 from primocut.worker.channel_jobs import backfill_channel
 from primocut.worker.channels import detach_channel, register_channel
 from primocut.worker.queue import QueueUnavailableError
-from primocut.youtube.client import ChannelInfo, VideoInfo, YouTubeError
+from primocut.youtube.client import ChannelInfo, ChannelStats, VideoInfo, YouTubeError
+
+NOW = datetime(2026, 7, 15, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _db(tmp_path) -> Database:
@@ -41,6 +46,16 @@ class FakeYouTube:
         self.units_used += 1
         return self._channel
 
+    def get_channels_stats(self, channel_ids):
+        # 1 unit per batch of 50, mirroring the real client.
+        self.units_used += (len(channel_ids) + 49) // 50
+        return [
+            ChannelStats(
+                channel_id=cid, subscribers=1000, total_views=50_000, video_count=7
+            )
+            for cid in channel_ids
+        ]
+
     def list_uploads_video_ids(self, playlist_id, *, limit=120):
         ids = [v.video_id for v in self._videos][:limit]
         # 1 unit per page of 50, mirroring the real client.
@@ -58,6 +73,13 @@ class BoomYouTube(FakeYouTube):
         raise YouTubeError("quota exceeded")
 
 
+class StatsBoomYouTube(FakeYouTube):
+    """Channel statistics fail, the uploads themselves are fine."""
+
+    def get_channels_stats(self, channel_ids):
+        raise YouTubeError("channels.list unavailable")
+
+
 def _channel_info(channel_id="UCchan0000000000000000", uploads="UUchan"):
     return ChannelInfo(
         channel_id=channel_id, title="Chan", handle="@chan", uploads_playlist_id=uploads
@@ -65,7 +87,8 @@ def _channel_info(channel_id="UCchan0000000000000000", uploads="UUchan"):
 
 
 def _videos(n=120):
-    # Alternate a Short (<= 60s) and a long-form video.
+    # Alternate a Short (<= 60s) and a long-form video. The stats ride along in
+    # the same videos.list response the real client returns.
     return [
         VideoInfo(
             video_id=f"vid{i:03d}",
@@ -73,6 +96,9 @@ def _videos(n=120):
             published_at=None,
             duration_s=30 if i % 2 == 0 else 600,
             thumbnail_url=f"https://i.ytimg.com/vi/vid{i:03d}/hq.jpg",
+            view_count=100 * i,
+            like_count=10 * i,
+            comment_count=i,
         )
         for i in range(n)
     ]
@@ -96,6 +122,13 @@ class _DeadQueue:
 
 def _fake_thumb(url: str) -> bytes:
     return url.encode()  # deterministic bytes → deterministic sha256
+
+
+def _rows(db, model):
+    from sqlalchemy import select
+
+    with db.session() as s:
+        return list(s.execute(select(model)).scalars())
 
 
 # ------------------------- registration -------------------------
@@ -269,9 +302,98 @@ def test_backfill_quota_accounting(tmp_path):
         "UCchan0000000000000000", settings=_settings(tmp_path), database=db,
         client=client, thumbnail_fetcher=_fake_thumb,
     )
-    # 120 videos → 3 playlist pages (3u) + 3 video batches (3u) = 6 units.
-    assert res["quota_units"] == 6
-    assert client.units_used == 6
+    # 120 videos → 3 playlist pages (3u) + 3 video batches (3u) + the channel
+    # statistics behind the first snapshot (1u) = 7 units.
+    assert res["quota_units"] == 7
+    assert client.units_used == 7
+
+
+# ------------------------- first snapshot -------------------------
+
+
+def test_backfill_writes_the_first_video_snapshots(tmp_path):
+    """The view/like/comment counts already ride along in the videos.list response
+    the backfill makes anyway, so recording them costs no extra quota and leaves
+    the dashboard populated before the first scheduled cycle."""
+    db = _db(tmp_path)
+    with db.session() as s:
+        crepo.upsert_channel(s, channel_id="UCchan0000000000000000",
+                             uploads_playlist_id="UUchan", backfill_state="queued")
+    client = FakeYouTube(channel=_channel_info(), videos=_videos(4))
+
+    backfill_channel(
+        "UCchan0000000000000000", settings=_settings(tmp_path), database=db,
+        client=client, thumbnail_fetcher=_fake_thumb, now=NOW,
+    )
+
+    assert len(_rows(db, VideoSnapshotRow)) == 4  # one per collected video
+    with db.session() as s:
+        snaps = crepo.list_video_snapshots(s, "vid002")
+        assert len(snaps) == 1
+        assert (snaps[0].views, snaps[0].likes, snaps[0].comments) == (200, 20, 2)
+        assert snaps[0].captured_at.replace(tzinfo=timezone.utc) == NOW
+
+
+def test_backfill_writes_the_first_channel_snapshot(tmp_path):
+    """Without it the dashboard has no subscriber count until the first cron."""
+    db = _db(tmp_path)
+    with db.session() as s:
+        crepo.upsert_channel(s, channel_id="UCchan0000000000000000",
+                             uploads_playlist_id="UUchan", backfill_state="queued")
+    client = FakeYouTube(channel=_channel_info(), videos=_videos(4))
+
+    backfill_channel(
+        "UCchan0000000000000000", settings=_settings(tmp_path), database=db,
+        client=client, thumbnail_fetcher=_fake_thumb, now=NOW,
+    )
+
+    with db.session() as s:
+        snap = crepo.latest_channel_snapshot(s, "UCchan0000000000000000")
+        assert snap is not None
+        assert snap.subscribers == 1000
+        assert snap.total_views == 50_000 and snap.video_count == 7
+        assert snap.captured_at.replace(tzinfo=timezone.utc) == NOW
+
+
+def test_backfill_snapshots_share_one_captured_at(tmp_path):
+    """A snapshot is a reading of one instant: the channel row and every video row
+    must be comparable, so they carry the same timestamp."""
+    db = _db(tmp_path)
+    with db.session() as s:
+        crepo.upsert_channel(s, channel_id="UCchan0000000000000000",
+                             uploads_playlist_id="UUchan", backfill_state="queued")
+    client = FakeYouTube(channel=_channel_info(), videos=_videos(4))
+
+    backfill_channel(
+        "UCchan0000000000000000", settings=_settings(tmp_path), database=db,
+        client=client, thumbnail_fetcher=_fake_thumb,  # no `now` → real clock
+    )
+
+    stamps = {r.captured_at for r in _rows(db, VideoSnapshotRow)}
+    stamps |= {r.captured_at for r in _rows(db, ChannelSnapshotRow)}
+    assert len(stamps) == 1
+
+
+def test_backfill_degrades_when_channel_stats_fail(tmp_path):
+    """The uploads are the point of the backfill: a channels.list failure costs the
+    channel snapshot, never the 120 videos nor a `done` state."""
+    db = _db(tmp_path)
+    with db.session() as s:
+        crepo.upsert_channel(s, channel_id="UCchan0000000000000000",
+                             uploads_playlist_id="UUchan", backfill_state="queued")
+    client = StatsBoomYouTube(channel=_channel_info(), videos=_videos(4))
+
+    res = backfill_channel(
+        "UCchan0000000000000000", settings=_settings(tmp_path), database=db,
+        client=client, thumbnail_fetcher=_fake_thumb, now=NOW,
+    )
+
+    assert res["videos"] == 4 and "error" not in res
+    assert len(_rows(db, VideoSnapshotRow)) == 4  # video snapshots still written
+    assert _rows(db, ChannelSnapshotRow) == []  # the degraded part
+    with db.session() as s:
+        ch = crepo.get_channel(s, "UCchan0000000000000000")
+        assert ch.backfill_state == "done" and ch.backfill_error is None
 
 
 def test_backfill_api_error_degrades_without_crashing(tmp_path):
