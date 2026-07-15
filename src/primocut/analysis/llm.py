@@ -1,19 +1,29 @@
-"""LLM client for structured segment selection (Anthropic).
+"""LLM client for structured extraction under forced tool use (multi-provider).
 
-The rest of the analysis depends only on the `SelectionLLM` protocol, so tests
-inject a fake and run without network. The real implementation forces a tool
-call to guarantee the schema (segment indices).
+The rest of the codebase depends only on the `SelectionLLM` protocol, so tests
+inject a fake and run without network. The real implementations force a tool
+call to guarantee the schema (segment indices for the analysis; packaging
+attributes for the enrichment).
+
+`images` carries raw bytes rather than URLs so the caller decides where the image
+came from (and tests never hit the network). The two providers differ only in how
+the image is packed into the message — the tool schema, the forced tool choice and
+the response extraction are identical, which is why OpenRouter inherits all of it.
 """
 
 from __future__ import annotations
 
+import base64
 import json
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 from ..config import Settings, get_settings
 from ..logging_conf import get_logger
 
 logger = get_logger(__name__)
+
+# (media_type, raw image bytes) — e.g. ("image/jpeg", b"\xff\xd8\xff...").
+ImageInput = tuple[str, bytes]
 
 
 class ToolCallError(RuntimeError):
@@ -27,9 +37,21 @@ class ToolCallError(RuntimeError):
 
 class SelectionLLM(Protocol):
     def select(
-        self, *, system: str, user: str, tool: dict[str, Any], tool_name: str
+        self,
+        *,
+        system: str,
+        user: str,
+        tool: dict[str, Any],
+        tool_name: str,
+        images: Sequence[ImageInput] | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
-        """Return the input (dict) of the forced tool call."""
+        """Return the input (dict) of the forced tool call.
+
+        `images` attaches images to the user turn (vision); `model` overrides the
+        provider's configured model for this call only. Both default to the
+        text-only, configured-model behavior the analysis relies on.
+        """
         ...
 
 
@@ -45,24 +67,48 @@ class AnthropicLLM:
             self._client = anthropic.Anthropic(api_key=self.settings.anthropic_api_key)
         return self._client
 
+    @staticmethod
+    def _content(user: str, images: Sequence[ImageInput] | None) -> Any:
+        if not images:
+            return user  # text-only: keep the plain string content
+        return [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": base64.standard_b64encode(data).decode(),
+                },
+            }
+            for media_type, data in images
+        ] + [{"type": "text", "text": user}]
+
     def select(
-        self, *, system: str, user: str, tool: dict[str, Any], tool_name: str
+        self,
+        *,
+        system: str,
+        user: str,
+        tool: dict[str, Any],
+        tool_name: str,
+        images: Sequence[ImageInput] | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
         client = self._get_client()
+        model = model or self.settings.anthropic_model
         response = client.messages.create(
-            model=self.settings.anthropic_model,
+            model=model,
             max_tokens=4096,
             system=system,
             tools=[tool],
             tool_choice={"type": "tool", "name": tool_name},
             thinking={"type": "disabled"},  # deterministic extraction; no thinking
-            messages=[{"role": "user", "content": user}],
+            messages=[{"role": "user", "content": self._content(user, images)}],
         )
         for block in response.content:
             if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
                 return dict(block.input)
         raise ToolCallError(
-            f"Model '{self.settings.anthropic_model}' (anthropic) did not return the "
+            f"Model '{model}' (anthropic) did not return the "
             f"tool call '{tool_name}'. Check whether the model supports tool use."
         )
 
@@ -111,10 +157,33 @@ class OpenAILLM:
             )
         return self._client
 
+    @staticmethod
+    def _content(user: str, images: Sequence[ImageInput] | None) -> Any:
+        if not images:
+            return user  # text-only: keep the plain string content
+        return [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{media_type};base64,"
+                    f"{base64.standard_b64encode(data).decode()}"
+                },
+            }
+            for media_type, data in images
+        ] + [{"type": "text", "text": user}]
+
     def select(
-        self, *, system: str, user: str, tool: dict[str, Any], tool_name: str
+        self,
+        *,
+        system: str,
+        user: str,
+        tool: dict[str, Any],
+        tool_name: str,
+        images: Sequence[ImageInput] | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
         client = self._get_client()
+        model = model or self._model()
         # Convert our schema {name, description, input_schema} to OpenAI's
         # function format {name, description, parameters}.
         openai_tool = {
@@ -126,12 +195,12 @@ class OpenAILLM:
             },
         }
         response = client.chat.completions.create(
-            model=self._model(),
+            model=model,
             tools=[openai_tool],
             tool_choice={"type": "function", "function": {"name": tool_name}},
             messages=[
                 {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "user", "content": self._content(user, images)},
             ],
         )
         tool_calls = response.choices[0].message.tool_calls or []
@@ -139,7 +208,7 @@ class OpenAILLM:
             if call.function.name == tool_name:
                 return json.loads(call.function.arguments or "{}")
         raise ToolCallError(
-            f"Model '{self._model()}' ({self.provider_label}) did not return the function "
+            f"Model '{model}' ({self.provider_label}) did not return the function "
             f"call '{tool_name}' — it likely does not support tool use (function calling). "
             "Choose a model that supports tools."
         )
