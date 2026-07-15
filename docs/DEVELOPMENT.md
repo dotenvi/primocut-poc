@@ -70,8 +70,23 @@ per view) and **cadence** (uploads/week, weekday/hour distribution, duration per
 persisted in `video_attributes`) among outliers vs the population, gated by a
 **minimum-occurrence guard**. The two persisted artifacts (syntactic attributes + packaging
 impact) are written by the snapshot cycle and by `primocut metrics refresh`; the dashboards
-stay pure reads. **Not yet built:** AI enrichment (thumbnail/title LLM attributes, comment
-synthesis) and the Phase 2 UI.
+stay pure reads.
+
+**Phase 2 UI** is in place: a **Competitors** section in the SPA (`#/projects…`), where a
+**project selector** (create/rename/remove — removing detaches channels and says the data is
+kept) scopes everything below it. The **selected project lives in the URL**, so no global store
+was introduced and every screen survives a reload. Inside a project, two tabs: **Channels**
+(register by URL/@handle/ID, live **backfill progress** via the existing 2 s polling — guarded
+so it stops when terminal — and detach) and **Dashboard**, the niche view (outlier ranking with
+score/band/**VPH**, per-project attribute patterns, packaging log with a before/after verdict,
+resurgence alerts). Drilling down: a **channel dashboard** (baselines, engagement, cadence
+histograms, outliers, packaging, resurgences) and a **video detail** (snapshot time series,
+outlier/VPH/engagement, syntactic attributes, packaging log, YouTube link). Methodology guards
+are surfaced rather than hidden: a **provisional** pill, an **insufficient data** note, a `—`
+where VPH cannot be computed, a suppressed-pattern message, and — for a channel too fresh to
+score — **"Collecting data — provisional scores from tomorrow."** instead of an empty screen.
+Charts are hand-built (inline SVG / CSS bars); no chart library was added.
+**Not yet built:** AI enrichment (thumbnail/title LLM attributes, comment synthesis).
 
 The pipeline runs, in order: **audio (yt-dlp → FFmpeg 16 kHz mono) → chat replay (optional)
 → transcription (faster-whisper `large-v3-turbo`, GPU) → analysis (LLM, macro topics)**.
@@ -280,13 +295,45 @@ primocut metrics show --channel <UC...>      # channel baselines, outliers, enga
 primocut metrics show --channel <UC...> --video <VID>   # snapshot series + VPH + attributes
 ```
 
-The same three views are exposed over HTTP: `GET /api/projects/{pid}/dashboard`,
+The same three views are exposed over HTTP — and are what the **Competitors** UI reads:
+`GET /api/projects/{pid}/dashboard`,
 `GET /api/channels/{cid}/dashboard`, `GET /api/channels/{cid}/videos/{vid}`. Baseline window,
 brackets, provisional/resurgence/impact/pattern thresholds are all configurable
 (`PRIMOCUT_OUTLIER_*`, `PRIMOCUT_VPH_*`, `PRIMOCUT_RESURGENCE_*`, `PRIMOCUT_PACKAGING_IMPACT_*`,
 `PRIMOCUT_PATTERN_*` — see `.env.example`).
 
-### 2.9 Tests
+### 2.9 Competitors UI — manual smoke test
+
+The Phase 2 UI has no automated coverage (the suite is Python-only), so it is validated by
+hand. Build the UI and start `primocut serve` (plus Redis + `primocut worker` for a real
+backfill), then open `http://127.0.0.1:8000/#/projects`:
+
+1. **Projects.** With an empty database the section opens on **"Create your first project"**.
+   Create one → the selector appears and the URL becomes `#/projects/{pid}`. **Manage** →
+   rename (the selector updates) and remove (confirms *"Channels are detached; all channel
+   data is kept."*). Reloading any deep URL restores the same screen (selection is in the URL,
+   not in memory).
+2. **Channels tab.** Add a channel by URL/@handle → the row appears with a live progress bar
+   (`done/total`, polled every 2 s) that settles when the backfill ends; re-adding a channel
+   already tracked reports *"already tracked, no new collection"*. Detach asks for
+   confirmation and keeps the data.
+3. **Dashboards.** With snapshots collected (`primocut competitors snapshot` a couple of times,
+   then `primocut metrics refresh`), check the niche **Dashboard** (ranked outliers with
+   score/band/VPH, patterns, packaging log with the video title + before/after verdict,
+   resurgences), the **channel dashboard** (baselines, engagement, cadence, packaging) and a
+   **video detail** (snapshot chart, attributes, working *Watch on YouTube*).
+4. **Guard states (the important ones).** A channel too fresh to score must show
+   **"Collecting data — provisional scores from tomorrow."** instead of an empty dashboard; a
+   video under 7 days must carry the amber **provisional** pill; a format with too few peers
+   must read **insufficient data**; a video with a single snapshot must show **`—`** for VPH
+   (never a fabricated `total_views ÷ age`); a small pattern sample must stay suppressed.
+
+To exercise the states without waiting for real collection, point the server at a throwaway DB
+(`PRIMOCUT_DB_PATH=/tmp/smoke.db primocut serve`) and seed it through `primocut.db.competitors`
+(`upsert_channel`/`link_channel`/`upsert_video`/`add_video_snapshot`) — two snapshots on a video
+are enough for a VPH, and ≥10 same-format peers for a baseline.
+
+### 2.10 Tests
 
 ```bash
 source .venv/bin/activate
@@ -457,6 +504,12 @@ time. This holds in both the CLI and the web app.
 - Snapshot collection (cycle job + scheduler): `src/primocut/worker/snapshot_jobs.py`,
   `src/primocut/worker/scheduler.py`
 - Projects/competitors API router: `src/primocut/api/projects.py`
+- Frontend (Svelte SPA): `frontend/src/` — hash routing + sidebar in `App.svelte`, the single
+  API client in `lib/api.js`, formatting helpers in `lib/format.js`, one global stylesheet
+  `app.css` (design tokens; components carry no `<style>` blocks). Phase 2 UI:
+  `views/Competitors.svelte` (project shell: selector + sub-route dispatch) over
+  `views/{ProjectDashboard,ProjectChannels,ChannelDashboard,VideoDetail}.svelte`, with
+  `components/{ProjectSwitcher,OutlierTable,Sparkline}.svelte`.
 
 ---
 
@@ -615,6 +668,39 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 
 The most important section. **Never overwrite or delete an entry**: a reverted decision gets a
 **new** entry pointing to the reversal. Dates in ISO (`YYYY-MM-DD`).
+
+### 2026-07-15 · Phase 2 UI: route-encoded project selection, guards shown not hidden
+**Type:** technical + product.
+**Decision:** build the Competitors UI inside the existing SPA, following its conventions rather
+than introducing new ones. Key decisions:
+- **The selected project lives in the URL** (`#/projects/{pid}/channels/{cid}/videos/{vid}`), not
+  in a store. The codebase had **zero Svelte stores** — state is component-local, and the only
+  global state is the hash route. Route-encoding keeps that property, makes every screen
+  reload-safe and linkable, and the selector is simply a dropdown that rewrites the hash. The
+  rejected alternative (a `writable` selectedProjectId + localStorage, with the selector pinned
+  in the sidebar) would have introduced the app's first store to model something the URL already
+  models.
+- **Methodology guards are surfaced, never hidden.** Guideline 10 is only worth anything if the
+  UI shows it: a **provisional** pill (amber `--cue`), an **insufficient data** note, a literal
+  **`—`** where VPH is `None` (a single snapshot — never `total_views ÷ age`), a
+  suppressed-pattern message, and **"Collecting data — provisional scores from tomorrow."** for a
+  channel too fresh to score. A fresh channel must never render an empty dashboard.
+- **No chart library.** The snapshot series is an inline **SVG** polyline (non-scaling stroke);
+  cadence is CSS bars reusing the existing `.spark` well. Consistent with the chat-activity
+  histogram and keeps the bundle light (~92 kB).
+- **Three backend serialization tweaks, all pure reads, no methodology change.** The project
+  dashboard's packaging rows carried the **channel** title where the UI needs the **video** title
+  (a latent bug — the packaging log is per video); each ranked outlier now carries **current
+  VPH** (reusing `core.current_vph`) so the niche ranking shows score/band/VPH; and the channel
+  dashboard gained a **`packaging`** key (same shape as the project one, scoped to the channel).
+  The third was not in the original approval but the channel dashboard is specified to show
+  packaging changes, and the only alternative — fetching the whole project dashboard in the
+  channel view just to filter it — would recompute every channel's scores on every channel page.
+**Reason:** the metrics engine was already correct but invisible; the UI is what makes the niche
+signal usable, and showing the guards is what keeps it honest.
+**Test note:** the suite is Python-only, so the UI is covered by a **documented manual smoke
+test** ([§2.9](#29-competitors-ui--manual-smoke-test)); the service tweaks only add JSON keys, so
+the metrics suite (incl. the shared-channel test) stays green.
 
 ### 2026-07-14 · Phase 2 metrics engine: deterministic scores computed on read
 **Type:** technical (methodology — `PRIMOCUT.md` guideline 10 is non-negotiable).
