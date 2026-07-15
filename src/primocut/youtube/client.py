@@ -33,6 +33,7 @@ QUOTA_COSTS = {
     "channels.list": 1,
     "playlistItems.list": 1,
     "videos.list": 1,
+    "commentThreads.list": 1,
     "search.list": 100,
 }
 
@@ -45,6 +46,23 @@ Transport = Callable[[str, dict], dict]
 class YouTubeError(RuntimeError):
     """A permanent YouTube API error (bad key, not found, quota exceeded). It is
     non-transient: callers degrade and log, never crash."""
+
+
+class CommentsDisabledError(YouTubeError):
+    """The uploader turned comments off on this video.
+
+    A distinct type because it is not a failure to recover from but a permanent
+    fact about the video: the collector records it as a terminal state and stops
+    asking, instead of retrying every cycle forever.
+    """
+
+
+@dataclass
+class CommentInfo:
+    comment_id: str
+    text: str
+    like_count: int
+    author: str
 
 
 @dataclass
@@ -218,6 +236,49 @@ class YouTubeClient:
                 out.append(_parse_video(item))
         return out
 
+    def list_top_comments(self, video_id: str, *, pages: int = 2) -> list[CommentInfo]:
+        """Page the video's most relevant comment threads (1 unit per page of 100).
+
+        `order=relevance` is YouTube's own top-comment ranking — the same one the
+        watch page shows. Only top-level comments are collected (replies are a
+        conversation about a comment, not audience demand), and `pages` caps the
+        spend: the tail of a long thread adds noise, not signal.
+
+        Raises CommentsDisabledError when the uploader turned comments off.
+        """
+        out: list[CommentInfo] = []
+        page_token: str | None = None
+        for _ in range(max(0, pages)):
+            params: dict = {
+                "part": "snippet",
+                "videoId": video_id,
+                "order": "relevance",
+                "maxResults": 100,
+                "textFormat": "plainText",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            try:
+                data = self._call(
+                    "commentThreads", params, cost=QUOTA_COSTS["commentThreads.list"]
+                )
+            except YouTubeError as exc:
+                # The API signals this as a plain 403; the reason is only in the
+                # body, which the transport folds into the message.
+                if "commentsDisabled" in str(exc):
+                    raise CommentsDisabledError(
+                        f"comments are disabled on video {video_id}"
+                    ) from exc
+                raise
+            for item in data.get("items", []):
+                comment = _parse_comment_thread(item)
+                if comment is not None:
+                    out.append(comment)
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+        return out
+
     def get_channels_stats(self, channel_ids: list[str]) -> list[ChannelStats]:
         """Fetch channel statistics in batches of 50 (channels.list, 1 unit/batch)."""
         out: list[ChannelStats] = []
@@ -295,6 +356,21 @@ def _int(value) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _parse_comment_thread(item: dict) -> CommentInfo | None:
+    """Pull the top-level comment out of a commentThreads item; None if malformed."""
+    top = item.get("snippet", {}).get("topLevelComment", {})
+    comment_id = top.get("id")
+    if not comment_id:
+        return None
+    snippet = top.get("snippet", {})
+    return CommentInfo(
+        comment_id=comment_id,
+        text=snippet.get("textOriginal", "") or snippet.get("textDisplay", ""),
+        like_count=_int(snippet.get("likeCount")),
+        author=snippet.get("authorDisplayName", ""),
+    )
 
 
 def _parse_video(item: dict) -> VideoInfo:
