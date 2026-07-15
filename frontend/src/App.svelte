@@ -42,7 +42,7 @@
   </nav>
 </aside>
 
-<main class:report={route.startsWith('/report/')}>
+<main class:report={route.startsWith('/report/')} class:projects={route.startsWith('/projects')}>
   {#if route.startsWith('/report/')}
     <Report id={route.split('/')[2]} />
   {:else if route.startsWith('/projects')}

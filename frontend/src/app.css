@@ -71,6 +71,10 @@ a:hover { color: var(--tally); text-decoration: underline; text-underline-offset
 main { flex: 1 1 auto; min-width: 0; max-width: 900px; margin: 0 auto; padding: 28px 20px 88px; }
 section { margin: 28px 0; }
 
+/* Competitors — dense tables and dashboards: give them the full width and let
+   them sit against the sidebar instead of floating in the middle. */
+main.projects { max-width: 1720px; margin-left: 0; }
+
 /* Report — "watch" layout: sticky player on the left, tabs on the right.
    Widens only on the report route; collapses to one column while the
    pipeline is still running (no tabs yet) and on narrow screens. */
