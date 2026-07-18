@@ -18,12 +18,20 @@
 
   // Identity that, when it changes, should remount the view (views load on mount).
   $: key = `${route.view}/${route.pid || ''}/${route.lid || route.vid || route.cid || ''}`
+
+  // Width policy: the canvas is generous by default so large screens are used;
+  // only reading/table-oriented views opt back into the comfortable measure
+  // (long lines of prose or wide tables read worse when they sprawl).
+  const READING_VIEWS = new Set([
+    'radar', 'activity', 'lives', 'niche', 'video', 'channel', 'settings',
+  ])
+  $: contentWidth = READING_VIEWS.has(route.view) ? 'max-w-[1160px]' : 'max-w-[1680px]'
 </script>
 
 <div class="grid grid-cols-[236px_1fr] min-h-screen max-[960px]:grid-cols-1">
   <Sidebar {route} />
 
-  <main class="px-7 pt-6 pb-16 max-w-[1160px] w-full">
+  <main class="px-7 pt-6 pb-16 w-full {contentWidth}">
     {#key key}
       {#if route.view === 'radar'}
         <Radar />
