@@ -10,15 +10,21 @@ guideline-10 methodology is unit-tested in isolation:
 - views-per-hour comes **exclusively from snapshot deltas** — when no delta exists
   the value is `None`, never `total_views / age`;
 - a young video's score is flagged **provisional**, and a channel with too few
-  same-format videos yields **insufficient_data** rather than a misleading number.
+  same-format videos yields **insufficient_sample** rather than a misleading number.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from statistics import median as _median
 from typing import Sequence
+
+# Band names in ascending severity. A video's band is the highest one whose
+# threshold it reaches; the three names mean the same thing in either basis
+# (percentile or fixed-multiple) — see `band_ruler`.
+BAND_NAMES: tuple[str, str, str] = ("relevant", "strong", "exceptional")
 
 
 # ------------------------- small value types -------------------------
@@ -42,19 +48,40 @@ class VideoMeta:
 
 
 @dataclass(frozen=True)
-class Baseline:
+class BandRuler:
+    """The per-channel, per-format ruler that classifies a video into a band.
+
+    `median` and `sample_size` describe the rolling-window peer set. `basis` is
+    "percentile" or "fixed_multiple"; `cutoffs` maps each band name to its ruler
+    value (percentiles 90/97/99, or multiples 3/6/10). `thresholds` maps each
+    band name to the ABSOLUTE view count a video must reach for that band — the
+    percentile view value, or `median × multiple`.
+    """
+
     median: float
     sample_size: int
+    basis: str
+    cutoffs: dict[str, float]
+    thresholds: dict[str, float]
 
 
 @dataclass(frozen=True)
 class OutlierScore:
-    score: float | None
-    bracket: str | None
-    provisional: bool
-    baseline: float | None
-    sample_size: int
-    status: str  # "ok" | "provisional" | "insufficient_data"
+    # `median_multiple` (views / median) stays readable ("20.6× the median") but
+    # no longer classifies; `band` is the ordinal verdict. `percentile` is the
+    # cutoff percentile of the reached band (percentile basis only), `None` in the
+    # legacy fixed-multiple basis. `band_cutoffs` travels alongside so a consumer
+    # (e.g. the M2 event log) is self-descriptive: a later config change cannot
+    # retroactively rewrite the meaning of a recorded band.
+    median_multiple: float | None
+    band: str | None  # "relevant" | "strong" | "exceptional" | None
+    percentile: float | None
+    band_basis: str
+    band_cutoffs: dict[str, float] = field(default_factory=dict)
+    provisional: bool = False
+    baseline: float | None = None
+    sample_size: int = 0
+    status: str = ""  # "ok" | "provisional" | "insufficient_sample"
 
 
 @dataclass(frozen=True)
@@ -105,59 +132,119 @@ def median(values: Sequence[float]) -> float | None:
     return float(_median(vals))
 
 
-def parse_brackets(spec: str) -> list[float]:
-    """Parse an ascending, comma-separated bracket spec (e.g. "3,6,10")."""
-    out = [float(part) for part in spec.split(",") if part.strip()]
-    return sorted(out)
+def parse_cutoffs(spec: str) -> dict[str, float]:
+    """Parse three ascending, comma-separated cutoffs into the band map.
+
+    Percentile basis expects "90,97,99"; fixed-multiple basis expects "3,6,10".
+    The three values are sorted and zipped onto (relevant, strong, exceptional).
+    """
+    vals = sorted(float(part) for part in spec.split(",") if part.strip())
+    if len(vals) != len(BAND_NAMES):
+        raise ValueError(f"expected {len(BAND_NAMES)} cutoffs, got {spec!r}")
+    return dict(zip(BAND_NAMES, vals))
 
 
-def _bracket_label(score: float, brackets: Sequence[float]) -> str | None:
-    """Highest bracket the score reaches, formatted like "3x" (None if below all)."""
-    label: str | None = None
-    for threshold in sorted(brackets):
-        if score >= threshold:
-            value = int(threshold) if float(threshold).is_integer() else threshold
-            label = f"{value}x"
-    return label
+def nearest_rank_percentile(values: Sequence[float], q: float) -> float | None:
+    """The q-th percentile (q in 0..100) by the nearest-rank method — the value
+    at 1-based rank ceil(q/100 · n), no interpolation. `None` for an empty input.
+
+    Nearest-rank (rather than linear interpolation) is deliberate: with the small
+    samples we work with (>= 10), interpolation would invent cutoffs strictly
+    between two observed view counts — values no real video in the window ever
+    had — whereas nearest-rank always returns an actually-observed data point and
+    is stable and deterministic as the window shifts by one video.
+    """
+    vals = sorted(float(v) for v in values if v is not None)
+    if not vals:
+        return None
+    rank = math.ceil((q / 100.0) * len(vals))
+    rank = max(1, min(rank, len(vals)))
+    return vals[rank - 1]
+
+
+def wilson_interval(hits: int, n: int, z: float) -> tuple[float, float]:
+    """The Wilson score interval for a proportion `hits / n` at confidence `z`.
+
+    Wilson, not Wald (p ± z·√(p(1−p)/n)): Wald's width collapses to zero at p=0
+    and p=1 — frequent with rare attributes on a small n — falsely asserting
+    absolute certainty; Wilson keeps a sensible interval there. `n == 0` yields
+    the whole [0, 1] (no information), so an empty group never separates.
+    """
+    if n <= 0:
+        return (0.0, 1.0)
+    phat = hits / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = (phat + z2 / (2.0 * n)) / denom
+    margin = (z / denom) * math.sqrt(phat * (1.0 - phat) / n + z2 / (4.0 * n * n))
+    return (max(0.0, center - margin), min(1.0, center + margin))
 
 
 # ------------------------- outlier score -------------------------
 
 
-def channel_baseline(peer_views: Sequence[int], *, min_sample: int) -> Baseline | None:
-    """Median of a same-format, already-windowed peer set. `None` when there are
-    fewer than `min_sample` peers, or the median is non-positive (no basis for a
-    ratio) — both surface as "insufficient_data" downstream."""
+def band_ruler(
+    peer_views: Sequence[int],
+    *,
+    basis: str,
+    cutoffs: dict[str, float],
+    min_sample: int,
+) -> BandRuler | None:
+    """Build the classification ruler from a same-format, already-windowed peer
+    set. `None` when there are fewer than `min_sample` peers, or the median is
+    non-positive (no basis for a multiple) — both surface as
+    "insufficient_sample" downstream.
+
+    Percentile basis: each band threshold is the nearest-rank percentile of the
+    peer views. Fixed-multiple basis (legacy): each threshold is median × the
+    multiple. Bands remain a pure per-channel metric — the project never enters.
+    """
     vals = [int(v) for v in peer_views]
     if len(vals) < min_sample:
         return None
     med = median(vals)
     if med is None or med <= 0:
         return None
-    return Baseline(median=med, sample_size=len(vals))
+    if basis == "percentile":
+        thresholds = {name: nearest_rank_percentile(vals, q) for name, q in cutoffs.items()}
+    elif basis == "fixed_multiple":
+        thresholds = {name: med * mult for name, mult in cutoffs.items()}
+    else:
+        raise ValueError(f"unknown band basis {basis!r}")
+    return BandRuler(median=med, sample_size=len(vals), basis=basis,
+                     cutoffs=dict(cutoffs), thresholds=thresholds)
 
 
 def outlier_score(
     views: int,
-    baseline: Baseline | None,
+    ruler: BandRuler | None,
     *,
-    brackets: Sequence[float],
     provisional: bool,
 ) -> OutlierScore:
-    """Score = views / baseline median, labelled by bracket. A young video is
-    flagged provisional; an absent baseline yields insufficient_data."""
-    if baseline is None:
+    """Classify `views` against a channel-format ruler. `median_multiple` is still
+    computed and carried (readable), but the `band` — the highest cutoff the
+    views reach — is the verdict. A young video is flagged provisional; an absent
+    ruler yields insufficient_sample."""
+    if ruler is None:
         return OutlierScore(
-            score=None, bracket=None, provisional=provisional,
-            baseline=None, sample_size=0, status="insufficient_data",
+            median_multiple=None, band=None, percentile=None, band_basis="",
+            band_cutoffs={}, provisional=provisional, baseline=None,
+            sample_size=0, status="insufficient_sample",
         )
-    score = views / baseline.median
+    band: str | None = None
+    for name in BAND_NAMES:  # ascending — the last one reached wins
+        if views >= ruler.thresholds[name]:
+            band = name
+    percentile = ruler.cutoffs[band] if band is not None and ruler.basis == "percentile" else None
     return OutlierScore(
-        score=score,
-        bracket=_bracket_label(score, brackets),
+        median_multiple=views / ruler.median,
+        band=band,
+        percentile=percentile,
+        band_basis=ruler.basis,
+        band_cutoffs=dict(ruler.cutoffs),
         provisional=provisional,
-        baseline=baseline.median,
-        sample_size=baseline.sample_size,
+        baseline=ruler.median,
+        sample_size=ruler.sample_size,
         status="provisional" if provisional else "ok",
     )
 

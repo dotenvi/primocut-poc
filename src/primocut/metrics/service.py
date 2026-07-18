@@ -72,22 +72,32 @@ def _by_format(items, is_short_of) -> dict[str, list]:
 # ------------------------- channel-level outlier scoring -------------------------
 
 
+def _band_config(settings: Settings) -> tuple[str, dict[str, float]]:
+    """The active band basis and its three cutoffs (global — never per-project)."""
+    basis = settings.band_basis
+    spec = (
+        settings.band_cutoffs_percentile if basis == "percentile"
+        else settings.band_cutoffs_fixed
+    )
+    return basis, core.parse_cutoffs(spec)
+
+
 def _channel_scores(
     session, channel_id: str, *, settings: Settings, now: datetime
-) -> tuple[dict[str, _Scored], dict[str, core.Baseline | None]]:
-    """Score every video of a channel against its per-format median baseline.
+) -> tuple[dict[str, _Scored], dict[str, core.BandRuler | None]]:
+    """Classify every video of a channel against its per-format band ruler.
 
-    The baseline for each format is the median of the same-format videos in the
-    rolling window = the smaller of "the last N videos" and "the last D days".
-    Returns (video_id -> _Scored, format -> Baseline|None).
+    The ruler for each format is built from the median AND the band cutoffs of the
+    same-format videos in the rolling window = the smaller of "the last N videos"
+    and "the last D days". Returns (video_id -> _Scored, format -> BandRuler|None).
     """
     videos = crepo.list_channel_videos(session, channel_id)
     views_by_id = crepo.latest_views(session, [v.video_id for v in videos])
-    brackets = core.parse_brackets(settings.outlier_brackets)
+    basis, cutoffs = _band_config(settings)
     provisional_cut = now - timedelta(days=settings.outlier_provisional_days)
     window_cut = now - timedelta(days=settings.outlier_window_days)
 
-    baselines: dict[str, core.Baseline | None] = {}
+    rulers: dict[str, core.BandRuler | None] = {}
     for fmt, is_short in FORMATS:
         peers = [
             v for v in videos
@@ -98,8 +108,9 @@ def _channel_scores(
         ]
         peers.sort(key=lambda v: v.published_at, reverse=True)
         peers = peers[: settings.outlier_window_videos]
-        baselines[fmt] = core.channel_baseline(
-            [views_by_id[v.video_id] for v in peers], min_sample=settings.outlier_min_sample
+        rulers[fmt] = core.band_ruler(
+            [views_by_id[v.video_id] for v in peers],
+            basis=basis, cutoffs=cutoffs, min_sample=settings.outlier_min_sample,
         )
 
     scored: dict[str, _Scored] = {}
@@ -108,21 +119,18 @@ def _channel_scores(
             continue  # no snapshot yet — cannot be scored
         provisional = v.published_at is None or v.published_at > provisional_cut
         score = core.outlier_score(
-            views_by_id[v.video_id], baselines[_format(v.is_short)],
-            brackets=brackets, provisional=provisional,
+            views_by_id[v.video_id], rulers[_format(v.is_short)],
+            provisional=provisional,
         )
         scored[v.video_id] = _Scored(
             v.video_id, channel_id, v.title, v.is_short, views_by_id[v.video_id], score
         )
-    return scored, baselines
+    return scored, rulers
 
 
-def _is_definitive_outlier(sc: _Scored, *, threshold: float) -> bool:
-    return (
-        sc.score.status == "ok"
-        and sc.score.score is not None
-        and sc.score.score >= threshold
-    )
+def _is_definitive_outlier(sc: _Scored) -> bool:
+    """A mature (non-provisional, sufficient-baseline) video that reached a band."""
+    return sc.score.status == "ok" and sc.score.band is not None
 
 
 def _outlier_payload(sc: _Scored, *, with_channel: bool = False, vph: float | None = None) -> dict:
@@ -131,8 +139,11 @@ def _outlier_payload(sc: _Scored, *, with_channel: bool = False, vph: float | No
         "title": sc.title,
         "is_short": sc.is_short,
         "views": sc.views,
-        "score": sc.score.score,
-        "bracket": sc.score.bracket,
+        "median_multiple": sc.score.median_multiple,
+        "band": sc.score.band,
+        "band_basis": sc.score.band_basis,
+        "percentile": sc.score.percentile,
+        "band_cutoffs": sc.score.band_cutoffs,
         "provisional": sc.score.provisional,
     }
     if with_channel:
@@ -177,27 +188,35 @@ def _attributes_by_source(session, video_id: str) -> dict:
 def _patterns_for(session, all_scored: list[_Scored], *, settings: Settings) -> list[dict]:
     """Conditional distributions, computed once per attribute source.
 
-    Each source's population is restricted to the videos that actually have a row
-    for it — an un-enriched video is *unknown*, not "attribute absent".
+    The outlier group is the banded, mature videos; the control is the banded==
+    null, mature videos. Provisional (< 7 days) and insufficient-sample videos are
+    censored from both. Each source's groups are restricted to the videos that
+    actually have a row for it — an un-enriched video is *unknown*, not "attribute
+    absent".
     """
-    threshold = settings.pattern_outlier_bracket
     video_ids = [sc.video_id for sc in all_scored]
+    mature = [sc for sc in all_scored if sc.score.status == "ok"]
     out: list[dict] = []
     for source in ATTR_SOURCES:
         attrs = crepo.list_video_attributes(session, video_ids, source)
-        population = [attrs[sc.video_id].attributes for sc in all_scored if sc.video_id in attrs]
         outliers = [
             attrs[sc.video_id].attributes
-            for sc in all_scored
-            if sc.video_id in attrs and _is_definitive_outlier(sc, threshold=threshold)
+            for sc in mature
+            if sc.video_id in attrs and sc.score.band is not None
+        ]
+        control = [
+            attrs[sc.video_id].attributes
+            for sc in mature
+            if sc.video_id in attrs and sc.score.band is None
         ]
         out.extend(
-            {"attribute": p.attribute, "outlier_rate": p.outlier_rate,
-             "population_rate": p.population_rate, "lift": p.lift,
-             "outlier_occurrences": p.outlier_occurrences, "source": p.source}
+            {"attribute": p.attribute, "freq_outlier": p.freq_outlier,
+             "ci_outlier": list(p.ci_outlier), "freq_control": p.freq_control,
+             "ci_control": list(p.ci_control), "lift": p.lift,
+             "n_outlier": p.n_outlier, "n_control": p.n_control,
+             "verdict": p.verdict, "source": p.source}
             for p in conditional_patterns(
-                population, outliers,
-                min_occurrence=settings.pattern_min_occurrence, source=source,
+                outliers, control, z=settings.pattern_confidence, source=source,
             )
         )
     return out
@@ -243,13 +262,16 @@ def video_report(session, channel_id, video_id, *, settings=None, now=None) -> d
 
     outlier = (
         {
-            "score": sc.score.score, "bracket": sc.score.bracket,
+            "median_multiple": sc.score.median_multiple, "band": sc.score.band,
+            "band_basis": sc.score.band_basis, "percentile": sc.score.percentile,
+            "band_cutoffs": sc.score.band_cutoffs,
             "provisional": sc.score.provisional, "baseline": sc.score.baseline,
             "sample_size": sc.score.sample_size, "format": _format(video.is_short),
             "status": sc.score.status,
         }
         if sc is not None
-        else {"status": "insufficient_data", "score": None, "bracket": None,
+        else {"status": "insufficient_sample", "median_multiple": None, "band": None,
+              "band_basis": "", "percentile": None, "band_cutoffs": {},
               "provisional": False, "baseline": None, "sample_size": 0,
               "format": _format(video.is_short)}
     )
@@ -309,15 +331,16 @@ def channel_dashboard(session, channel_id, *, settings=None, now=None) -> dict |
     if channel is None:
         return None
 
-    scored, baselines = _channel_scores(session, channel_id, settings=settings, now=now)
+    scored, rulers = _channel_scores(session, channel_id, settings=settings, now=now)
     videos = crepo.list_channel_videos(session, channel_id)
     snap = crepo.latest_channel_snapshot(session, channel_id)
 
-    # Outlier ranking (>= the first bracket), most-viral first, per format.
+    # Outlier ranking (reached a band), most-viral first (by median multiple), per
+    # format.
     outliers = _by_format(
         sorted(
-            (sc for sc in scored.values() if sc.score.bracket is not None),
-            key=lambda sc: sc.score.score, reverse=True,
+            (sc for sc in scored.values() if sc.score.band is not None),
+            key=lambda sc: sc.score.median_multiple, reverse=True,
         ),
         lambda sc: sc.is_short,
     )
@@ -381,8 +404,12 @@ def channel_dashboard(session, channel_id, *, settings=None, now=None) -> dict |
             "video_count": snap.video_count if snap else None,
         },
         "baselines": {
-            fmt: ({"median": b.median, "sample": b.sample_size} if b else None)
-            for fmt, b in baselines.items()
+            fmt: (
+                {"median": r.median, "sample": r.sample_size, "basis": r.basis,
+                 "cutoffs": r.cutoffs, "thresholds": r.thresholds}
+                if r else None
+            )
+            for fmt, r in rulers.items()
         },
         "outliers": {
             fmt: [_outlier_payload(sc) for sc in scs] for fmt, scs in outliers.items()
@@ -413,12 +440,11 @@ def definitive_outlier_ids_for_channel(
     """
     settings = settings or get_settings()
     now = _now(now)
-    threshold = settings.pattern_outlier_bracket
     scored, _ = _channel_scores(session, channel_id, settings=settings, now=now)
     return [
         sc.video_id
         for sc in scored.values()
-        if _is_definitive_outlier(sc, threshold=threshold)
+        if _is_definitive_outlier(sc)
     ]
 
 
@@ -472,18 +498,17 @@ def project_dashboard(session, project_id, *, settings=None, now=None) -> dict |
 
     ranked = _by_format(
         sorted(
-            (sc for sc in all_scored if sc.score.bracket is not None),
-            key=lambda sc: sc.score.score, reverse=True,
+            (sc for sc in all_scored if sc.score.band is not None),
+            key=lambda sc: sc.score.median_multiple, reverse=True,
         ),
         lambda sc: sc.is_short,
     )
 
-    # Conditional distributions, per source: population = the project videos that
-    # have a row for that source; outliers = the definitive (non-provisional,
-    # >= threshold) subset of them. Computed per format, so an attribute's lift
-    # measures it against same-format peers and never against the gap between
-    # Shorts and long-form. Each format needs its own `pattern_min_occurrence`
-    # support, so a thin format simply reports nothing.
+    # Conditional distributions, per source: outliers = the banded mature videos
+    # with a row for that source; control = the banded==null mature ones. Computed
+    # per format, so an attribute's lift measures it against same-format peers and
+    # never against the gap between Shorts and long-form. Wilson intervals gate
+    # what shows, so a thin format simply separates nothing and reports nothing.
     patterns = {
         fmt: _patterns_for(session, scs, settings=settings)
         for fmt, scs in _by_format(all_scored, lambda sc: sc.is_short).items()

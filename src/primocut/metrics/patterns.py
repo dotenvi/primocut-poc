@@ -1,15 +1,25 @@
 """Per-project conditional distributions of title/thumbnail attributes.
 
 For each boolean attribute we compare how often it appears among a project's
-outliers versus its whole population, reporting the lift. A pattern is reported
-only when enough outliers exhibit it (the minimum-occurrence guard) — below that
-threshold the sample is too small to claim a pattern (guideline 10).
+outliers versus a matched CONTROL group, reporting the lift and a verdict. The
+control is the non-outlier, mature, sufficient-baseline videos — never the whole
+population: a population that contains the outliers themselves puts the numerator
+inside the denominator and crushes every lift toward 1.0. Provisional (< 7 days)
+videos are censored from BOTH groups: a young video is an unobserved outcome, not
+a "non-outlier", and a future outlier already carrying outlier attributes would
+bias the control in one direction only.
+
+An attribute is reported only when the 95% Wilson score intervals of its two
+frequencies do not overlap, in either direction (positive pattern or anti-pattern
+— an attribute rarer in outliers is as actionable as one commoner). Wilson, not
+Wald, because Wald's width collapses to zero at p=0/p=1 (frequent with rare
+attributes and small n). There is no minimum-n floor: a small group yields a wide
+interval that never separates, so the guard self-regulates.
 
 Callers pass ONE source's attributes at a time (syntactic, title_llm,
-thumbnail_llm) with the population restricted to the videos that have a row for
-it. Merging sources would be a methodology bug: a video nobody enriched lacks the
-AI keys, so it would be counted as "attribute absent" rather than "unknown",
-deflating the population rate and fabricating lift.
+thumbnail_llm) with each group restricted to the videos that have a row for it. A
+video nobody enriched lacks the AI keys, so merging sources would count it as
+"attribute absent" rather than "unknown", deflating a rate and fabricating lift.
 """
 
 from __future__ import annotations
@@ -17,14 +27,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
+from .core import wilson_interval
+
 
 @dataclass(frozen=True)
 class Pattern:
     attribute: str
-    outlier_rate: float
-    population_rate: float
+    freq_outlier: float
+    ci_outlier: tuple[float, float]
+    freq_control: float
+    ci_control: tuple[float, float]
     lift: float | None
-    outlier_occurrences: int
+    n_outlier: int
+    n_control: int
+    verdict: str  # "positive" | "negative"
     source: str = ""
 
 
@@ -38,38 +54,51 @@ def _boolean_attributes(rows: Sequence[dict]) -> set[str]:
 
 
 def conditional_patterns(
-    population: Sequence[dict],
     outliers: Sequence[dict],
+    control: Sequence[dict],
     *,
-    min_occurrence: int,
+    z: float,
     source: str = "",
 ) -> list[Pattern]:
-    """Frequency of each boolean attribute among `outliers` vs `population`.
+    """Frequency of each boolean attribute among `outliers` vs `control`.
 
-    Both sequences must come from the SAME attribute source, and `population` must
-    hold only the videos that have a row for it. `source` tags the results so a
-    dashboard can merge several sources without losing where each came from.
+    Both sequences must come from the SAME attribute source, each restricted to
+    the videos that have a row for it. `source` tags the results so a dashboard
+    can merge several sources without losing where each came from.
 
-    Only patterns whose outlier occurrence count is at least `min_occurrence` are
-    returned; the rest are suppressed as small-sample noise. Results are sorted by
-    descending lift, then descending occurrence.
+    An attribute is returned only when its two 95% (`z`) Wilson intervals do not
+    overlap: lower(outlier) > upper(control) is a positive pattern, upper(outlier)
+    < lower(control) an anti-pattern; anything else is inconclusive and dropped.
+    Results are sorted by descending effect size (lift), not by significance.
     """
-    if not population or not outliers:
+    if not outliers or not control:
         return []
 
-    pop_n = len(population)
-    out_n = len(outliers)
+    n_out = len(outliers)
+    n_ctl = len(control)
     results: list[Pattern] = []
 
-    for attr in sorted(_boolean_attributes(population) | _boolean_attributes(outliers)):
+    for attr in sorted(_boolean_attributes(outliers) | _boolean_attributes(control)):
         out_hits = sum(1 for a in outliers if a.get(attr) is True)
-        if out_hits < min_occurrence:
-            continue  # minimum-occurrence guard: too few outliers to claim a pattern
-        pop_hits = sum(1 for a in population if a.get(attr) is True)
-        outlier_rate = out_hits / out_n
-        population_rate = pop_hits / pop_n
-        lift = (outlier_rate / population_rate) if population_rate > 0 else None
-        results.append(Pattern(attr, outlier_rate, population_rate, lift, out_hits, source))
+        ctl_hits = sum(1 for a in control if a.get(attr) is True)
+        freq_out = out_hits / n_out
+        freq_ctl = ctl_hits / n_ctl
+        lo_out, hi_out = wilson_interval(out_hits, n_out, z)
+        lo_ctl, hi_ctl = wilson_interval(ctl_hits, n_ctl, z)
 
-    results.sort(key=lambda p: (p.lift if p.lift is not None else float("inf"), p.outlier_occurrences), reverse=True)
+        if lo_out > hi_ctl:
+            verdict = "positive"
+        elif hi_out < lo_ctl:
+            verdict = "negative"
+        else:
+            continue  # intervals overlap — inconclusive, not reported
+
+        lift = (freq_out / freq_ctl) if freq_ctl > 0 else None
+        results.append(Pattern(
+            attribute=attr, freq_outlier=freq_out, ci_outlier=(lo_out, hi_out),
+            freq_control=freq_ctl, ci_control=(lo_ctl, hi_ctl), lift=lift,
+            n_outlier=n_out, n_control=n_ctl, verdict=verdict, source=source,
+        ))
+
+    results.sort(key=lambda p: (p.lift if p.lift is not None else float("inf")), reverse=True)
     return results

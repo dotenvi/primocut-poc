@@ -121,15 +121,23 @@ class Settings(BaseSettings):
     # (never the mean) of the same-format videos in a rolling window = the smaller
     # of "the last N videos" and "the last D days"; separate baselines for Shorts
     # and long-form. A video needs at least `outlier_min_sample` same-format peers
-    # to be scored, else its status is "insufficient_data".
+    # to be scored, else its status is "insufficient_sample".
     outlier_window_videos: int = 50
     outlier_window_days: int = 180
     outlier_min_sample: int = 10
     # A video younger than this is scored "provisional" (it has not accumulated
     # views against a mature baseline yet).
     outlier_provisional_days: int = 7
-    # Bracket thresholds (comma-separated, ascending) labelling the score tier.
-    outlier_brackets: str = "3,6,10"
+    # How a video is classified into a band (relevant/strong/exceptional).
+    # "percentile" (default): the band cutoffs are percentiles of the channel's
+    # own same-format views (p90/p97/p99), so ~10% of a channel land in the tail.
+    # "fixed_multiple" (legacy): cutoffs are multiples of the median (3x/6x/10x) —
+    # demoted because on the skewed YouTube view distribution 3× the median lands
+    # around the channel's p72, not the tail, marking ~30% of videos as outliers.
+    # Each basis reads its own three ascending cutoffs.
+    band_basis: str = "percentile"  # "percentile" | "fixed_multiple"
+    band_cutoffs_percentile: str = "90,97,99"
+    band_cutoffs_fixed: str = "3,6,10"
     # Views-per-hour is derived exclusively from snapshot deltas. The "current"
     # VPH is the delta over this trailing window (hours).
     vph_current_window_hours: int = 24
@@ -144,12 +152,17 @@ class Settings(BaseSettings):
     # Packaging impact: mean VPH this many days before vs after a change (the
     # "after" side is computed only once the window has fully elapsed).
     packaging_impact_window_days: int = 7
-    # Conditional-distribution guard: a title/thumbnail pattern is reported for a
-    # project only if at least this many outlier videos exhibit it.
-    pattern_min_occurrence: int = 15
-    # The bracket (multiplier) at/above which a video counts as an outlier for the
-    # per-project pattern distributions. Also the batch-enrichment target.
-    pattern_outlier_bracket: float = 3.0
+    # Conditional-distribution guard: a title/thumbnail attribute is reported only
+    # when the 95% Wilson score intervals of its outlier and control frequencies do
+    # NOT overlap (z from `pattern_confidence`, 1.96 = 95%). Non-overlap of two 95%
+    # intervals is conservative (~alpha 0.005) BY DESIGN — it absorbs the multiple-
+    # comparisons correction across the ~15 attributes tested per report. There is
+    # deliberately no minimum-n floor: a small group yields a wide interval that
+    # never separates, so the interval self-regulates. The outlier group is every
+    # video with a band; the control is the banded==null, mature, sufficient-
+    # baseline videos (provisional and insufficient-sample videos are censored out
+    # of both).
+    pattern_confidence: float = 1.96
 
     # --- Phase 2: AI packaging enrichment (opt-in — costs LLM) ---
     # Model overrides for the enrichment calls. EMPTY means "use the selected
