@@ -38,8 +38,15 @@
   })
   onDestroy(() => window.removeEventListener('primocut:refresh', onRefresh))
 
-  // Keep the active project's branch open as you navigate into it.
-  $: if (route.pid) expanded = { ...expanded, [route.pid]: true }
+  // Auto-open the active project's branch when you *navigate* into it — but only
+  // once per pid change, so a manual collapse via the chevron isn't snapped back
+  // open (this reactive block also reads `expanded`, and would otherwise re-fire
+  // on every toggle and force the active branch back open).
+  let autoOpenedPid = null
+  $: if (route.pid && route.pid !== autoOpenedPid) {
+    autoOpenedPid = route.pid
+    expanded = { ...expanded, [route.pid]: true }
+  }
 
   function toggle(pid) {
     expanded = { ...expanded, [pid]: !expanded[pid] }
@@ -69,12 +76,13 @@
   const settingsActive = (pid) => String(route.pid) === String(pid) && route.view === 'settings'
 </script>
 
-<aside class="border-r border-line bg-panel px-2.5 py-4 flex flex-col max-[960px]:hidden">
+<aside class="sticky top-0 h-screen border-r border-line bg-panel px-2.5 py-4 flex flex-col max-[960px]:hidden">
   <a href={href.radar()} class="flex items-center gap-2.5 px-2 pb-4 no-underline">
     <span class="w-5 h-5 rounded border-2 border-accent relative after:content-[''] after:absolute after:inset-[3px] after:bg-accent after:rounded-[1px]"></span>
     <span class="font-semibold tracking-[0.2em] text-[13px] text-ink">PRIMOCUT</span>
   </a>
 
+  <div class="flex-1 min-h-0 overflow-y-auto flex flex-col">
   <a href={href.radar()} class="nav no-underline" class:on={route.view === 'radar'}>
     <span class="w-3.5 text-[11px] text-accent">◈</span>Radar
     {#if alerts > 0}
@@ -102,7 +110,7 @@
     {#if expanded[p.id]}
       <div class="pl-3.5 ml-3 border-l border-line">
         <a href={href.lives(p.id)} class="nav no-underline" class:on={livesActive(p.id)}>
-          <span class="w-3.5 text-[11px] text-ink-3">▷</span>Lives
+          <span class="w-3.5 text-[11px] text-ink-3">▷</span>Cut Room
           <span class="ml-auto font-mono text-[10.5px] text-ink-3">{p.live_count ?? 0}</span>
         </a>
         <a href={href.niche(p.id)} class="nav no-underline" class:on={nicheActive(p.id)}>
@@ -133,10 +141,11 @@
       <span class="font-mono text-[8px] w-2">+</span>New project
     </button>
   {/if}
+  </div>
 
-  <div class="mt-auto pt-3 px-2 border-t border-line">
+  <div class="pt-3 px-2 border-t border-line">
     <div class="font-mono text-[10px] flex justify-between text-ink-3">
-      <span>API quota</span>
+      <span>YouTube API quota</span>
       <span class="text-ok">{quota == null ? '—' : compactNumber(quota)} / {DAILY_QUOTA.toLocaleString()}</span>
     </div>
   </div>
