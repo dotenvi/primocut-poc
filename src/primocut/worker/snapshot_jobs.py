@@ -26,6 +26,7 @@ from ..logging_conf import get_logger
 from ..youtube.client import YouTubeClient
 from ..youtube.thumbnails import fetch_thumbnail_bytes, thumbnail_hash
 from .comment_collection import collect_outlier_comments
+from .event_emission import emit_outlier_events
 
 logger = get_logger(__name__)
 
@@ -97,15 +98,35 @@ def snapshot_cycle(
         target_ids, settings=settings, database=database, now=now
     )
 
-    # Comment collection: a sibling step, not part of the one above, because that
-    # one is deterministic-and-offline while this spends quota. It reads the
-    # snapshots just written, so a video that crossed the threshold this cycle is
-    # collected in the same pass. Costs no LLM call (guideline 9) and is isolated
-    # internally, so it never breaks the cycle. Kept BEFORE the quota log so the
-    # comment units fold into the cycle's reported total.
+    # Emission: record `outlier_crossed` for videos that stepped up a band, with
+    # the anti-flapping guard. This is the SINGLE crossing-detection point — it
+    # runs before comment collection, which consumes the events it writes. Reads
+    # the snapshots just persisted; isolated so a scoring error never breaks the
+    # cycle.
+    emit_outlier_events(target_ids, settings=settings, database=database, now=now)
+
+    # Comment collection: a sibling step, not part of the persistence one, because
+    # that one is deterministic-and-offline while this spends quota. It consumes
+    # the `outlier_crossed` events just emitted, so a video that crossed this cycle
+    # is collected in the same pass. Costs no LLM call (guideline 9) and is
+    # isolated internally, so it never breaks the cycle. Kept BEFORE the quota log
+    # so the comment units fold into the cycle's reported total.
     comments_collected = collect_outlier_comments(
         target_ids, settings=settings, database=database, client=client, now=now
     )
+
+    result = {
+        "scope": scope,
+        "channels": channels_done,
+        "videos": videos_done,
+        "packaging_changes": packaging_changes,
+        "comments": comments_collected,
+        "quota_units": client.units_used,
+    }
+    # A born-resolved ops record of the cycle: it carries the quota accounting the
+    # activity log reports and, being resolved at birth, never shows as an open
+    # alert. Isolated: a log-write failure must not fail an otherwise-good cycle.
+    _record_cycle_done(result, database=database, now=now)
 
     logger.info(
         "snapshot(%s) done: %d channel(s), %d video(s), %d packaging change(s), "
@@ -117,14 +138,27 @@ def snapshot_cycle(
         comments_collected,
         client.units_used,
     )
-    return {
-        "scope": scope,
-        "channels": channels_done,
-        "videos": videos_done,
-        "packaging_changes": packaging_changes,
-        "comments": comments_collected,
-        "quota_units": client.units_used,
-    }
+    return result
+
+
+def _record_cycle_done(result: dict, *, database, now: datetime) -> None:
+    """Append the cycle's `cycle_done` event (quota accounting for the activity
+    log). Born resolved, so `/api/alerts` never surfaces it."""
+    from ..db import events as erepo
+
+    try:
+        with database.session() as s:
+            erepo.add_event(
+                s,
+                category=erepo.CATEGORY_OPS,
+                type=erepo.CYCLE_DONE,
+                severity=erepo.SEVERITY_INFO,
+                occurred_at=now,
+                payload=dict(result),
+                resolved_at=now,  # a record, not an open failure
+            )
+    except Exception as exc:  # never let the log break the cycle
+        logger.error("cycle_done log failed: %s", exc)
 
 
 def _persist_metrics_artifacts(channel_ids, *, settings, database, now) -> None:
@@ -216,7 +250,8 @@ def _snapshot_channel(
                 )
             else:
                 changes += _detect_packaging(
-                    s, v, hashes[v.video_id], stored.get(v.video_id, ("", "")), now
+                    s, v, hashes[v.video_id], stored.get(v.video_id, ("", "")), now,
+                    channel_id=channel_id,
                 )
             crepo.add_video_snapshot(
                 s,
@@ -230,7 +265,9 @@ def _snapshot_channel(
     return len(videos), changes
 
 
-def _detect_packaging(s, video, new_hash: str, stored: tuple[str, str], now: datetime) -> int:
+def _detect_packaging(
+    s, video, new_hash: str, stored: tuple[str, str], now: datetime, *, channel_id: str
+) -> int:
     """Compare title + thumbnail hash against the last-known state; record any
     change and update the stored state. Returns the number of changes recorded."""
     from ..db import competitors as crepo
@@ -244,6 +281,7 @@ def _detect_packaging(s, video, new_hash: str, stored: tuple[str, str], now: dat
             old_value=old_title, new_value=video.title, detected_at=now,
         )
         crepo.update_video_packaging(s, video.video_id, title=video.title)
+        _emit_packaging_changed(s, channel_id, video.video_id, "title", old_title, video.title, now)
         changes += 1
 
     if old_hash and new_hash and old_hash != new_hash:
@@ -255,6 +293,7 @@ def _detect_packaging(s, video, new_hash: str, stored: tuple[str, str], now: dat
         crepo.update_video_packaging(
             s, video.video_id, thumbnail_url=video.thumbnail_url, thumbnail_hash=new_hash,
         )
+        _emit_packaging_changed(s, channel_id, video.video_id, "thumbnail", old_hash, new_hash, now)
         changes += 1
     elif not old_hash and new_hash:  # first successful hash — fill silently
         crepo.update_video_packaging(
@@ -262,3 +301,23 @@ def _detect_packaging(s, video, new_hash: str, stored: tuple[str, str], now: dat
         )
 
     return changes
+
+
+def _emit_packaging_changed(
+    s, channel_id: str, video_id: str, field: str, old_value: str, new_value: str,
+    now: datetime,
+) -> None:
+    """Record the packaging change as a niche event (project_id NULL; attributed
+    on read). Emitted in the same transaction as the change itself."""
+    from ..db import events as erepo
+
+    erepo.add_event(
+        s,
+        category=erepo.CATEGORY_NICHE,
+        type="packaging_changed",
+        severity=erepo.SEVERITY_INFO,
+        channel_id=channel_id,
+        video_id=video_id,
+        occurred_at=now,
+        payload={"field": field, "old_value": old_value, "new_value": new_value},
+    )
