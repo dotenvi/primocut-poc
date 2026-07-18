@@ -11,11 +11,18 @@ from __future__ import annotations
 
 from typing import Callable
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..db import competitors as crepo
 from ..metrics import service as metrics_service
+
+_FORMATS = ("long", "short")
+
+
+def _require_format(fmt: str) -> None:
+    if fmt not in _FORMATS:
+        raise HTTPException(status_code=400, detail="format must be 'long' or 'short'")
 
 
 class EnrichIn(BaseModel):
@@ -29,6 +36,41 @@ def build_metrics_router(
     *, get_db: Callable, get_queue_dep: Callable, get_settings_dep: Callable
 ) -> APIRouter:
     router = APIRouter(prefix="/api")
+
+    # Declared before the `{channel_id}` routes so the static path wins the match.
+    @router.get("/channels/distribution")
+    def distribution_batch(
+        channel_ids: str = Query(..., description="comma-separated channel ids"),
+        format: str = "long",
+        db=Depends(get_db),
+        settings=Depends(get_settings_dep),
+    ) -> dict:
+        """Batch "channel spread" for the Radar: one call for every visible card's
+        channel. Query volume is bounded by the number of channels, never by
+        videos-per-channel (no N+1, no snapshot scan)."""
+        _require_format(format)
+        ids = [c for c in channel_ids.split(",") if c]
+        with db.session() as s:
+            return metrics_service.channel_distributions(s, ids, fmt=format, settings=settings)
+
+    @router.get("/channels/{channel_id}/distribution")
+    def distribution(
+        channel_id: str,
+        format: str = "long",
+        db=Depends(get_db),
+        settings=Depends(get_settings_dep),
+    ) -> dict:
+        """One channel's "channel spread" for the video-detail strip: one call per
+        page. Returns the window histogram + band thresholds; the caller marks a
+        video by its own view count against `bucket_edges`."""
+        _require_format(format)
+        with db.session() as s:
+            data = metrics_service.channel_distribution(
+                s, channel_id, fmt=format, settings=settings
+            )
+        if data is None:
+            raise HTTPException(status_code=404, detail="channel not found")
+        return data
 
     @router.get("/channels/{channel_id}/dashboard")
     def channel_dashboard(

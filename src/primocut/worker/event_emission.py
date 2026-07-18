@@ -81,6 +81,9 @@ def _emit_channel(channel_id: str, *, settings: Settings, database, now: datetim
                     "views": sc.views,
                     "baseline": sc.score.baseline,
                     "provisional": sc.score.provisional,
+                    # Format travels so the Radar can pull the right channel-format
+                    # spread strip without first fetching the video.
+                    "is_short": sc.is_short,
                 },
             )
             video.last_band_emitted = band

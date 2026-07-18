@@ -331,3 +331,127 @@ def test_provisional_video_is_censored_from_control(tmp_path):
     # Control counts only the 15 mature plain videos — the provisional "?" is out.
     assert q["n_outlier"] == 15 and q["n_control"] == 15
     assert q["freq_control"] == 0.0 and q["verdict"] == "positive"
+
+
+# ------------------------- channel spread distribution -------------------------
+
+
+def test_channel_distribution_buckets_the_window_and_marks_the_tail(tmp_path):
+    # A skewed channel: 20 typical videos + one viral. The spread is a histogram of
+    # the window's view counts; the viral pins the max and sits alone in the tail.
+    db = _db(tmp_path)
+    _channel(db, "UCspread")
+    for i in range(20):
+        _video(db, "UCspread", f"v{i}", views=1000, is_short=False, days_ago=20 + i)
+    _video(db, "UCspread", "viral", views=100_000, is_short=False, days_ago=25)
+
+    with db.session() as s:
+        dist = service.channel_distribution(s, "UCspread", fmt="long", settings=PCT_SETTINGS, now=NOW)
+
+    assert dist["channel_id"] == "UCspread" and dist["format"] == "long"
+    assert dist["count"] == 21 and dist["max"] == 100_000.0
+    assert sum(dist["buckets"]) == 21
+    assert dist["buckets"][0] == 20 and dist["buckets"][-1] == 1
+    assert len(dist["bucket_edges"]) == len(dist["buckets"]) + 1
+    # Percentile thresholds travel along so the same strip can shade the bands.
+    assert dist["thresholds"] is not None and dist["median"] == 1000
+
+
+def test_channel_distribution_separates_formats(tmp_path):
+    db = _db(tmp_path)
+    _channel(db, "UCfmt")
+    for i in range(12):
+        _video(db, "UCfmt", f"long{i}", views=5000, is_short=False, days_ago=20 + i)
+    for i in range(12):
+        _video(db, "UCfmt", f"short{i}", views=300, is_short=True, days_ago=20 + i)
+
+    with db.session() as s:
+        long_d = service.channel_distribution(s, "UCfmt", fmt="long", settings=PCT_SETTINGS, now=NOW)
+        short_d = service.channel_distribution(s, "UCfmt", fmt="short", settings=PCT_SETTINGS, now=NOW)
+
+    assert long_d["count"] == 12 and long_d["max"] == 5000.0
+    assert short_d["count"] == 12 and short_d["max"] == 300.0
+
+
+def test_channel_distribution_unknown_channel_is_none(tmp_path):
+    db = _db(tmp_path)
+    with db.session() as s:
+        assert service.channel_distribution(s, "UCnope", fmt="long", settings=PCT_SETTINGS, now=NOW) is None
+
+
+def test_distribution_batch_has_no_nplus1_and_no_snapshot_scan(tmp_path):
+    # The Radar renders many cards. The batch must stay flat in the number of
+    # channels — never grow with videos-per-channel, and never scan snapshots.
+    db = _db(tmp_path)
+    for c in range(3):
+        cid = f"UCbatch{c}"
+        _channel(db, cid)
+        for i in range(30):  # many videos per channel
+            _video(db, cid, f"{cid}_v{i}", views=1000 + i, is_short=False, days_ago=20 + i)
+
+    ids = ["UCbatch0", "UCbatch1", "UCbatch2"]
+    engine = db.engine  # count the SQL statements the batch actually issues
+    seen = []
+    from sqlalchemy import event as sa_event
+
+    def _count(conn, cursor, statement, params, context, executemany):
+        seen.append(statement)
+
+    sa_event.listen(engine, "before_cursor_execute", _count)
+    try:
+        with db.session() as s:
+            out = service.channel_distributions(s, ids, fmt="long", settings=PCT_SETTINGS, now=NOW)
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", _count)
+
+    assert set(out) == set(ids)
+    for cid in ids:
+        assert out[cid]["count"] == 30
+    # No per-video snapshot query: the only snapshot read is the single batched
+    # latest_views. So query volume is bounded by channels, not videos.
+    assert not any("FROM video_snapshots" in q and "WHERE" in q and "IN (" not in q for q in seen), seen
+    # Flat in channels: 3 get_channel + 3 list_channel_videos + 1 latest_views = 7,
+    # regardless of the 30 videos each. Allow a small margin, but far below 3*30.
+    assert len(seen) <= 12, f"{len(seen)} queries — batch is not flat: {seen}"
+
+
+# ------------------------- distribution endpoints -------------------------
+
+
+def _pct_client(db) -> TestClient:
+    app = create_app()
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[get_settings_dep] = lambda: PCT_SETTINGS
+    return TestClient(app)
+
+
+def test_distribution_endpoint_single_and_batch(tmp_path):
+    db = _db(tmp_path)
+    _channel(db, "UCa")
+    for i in range(12):
+        _video(db, "UCa", f"a{i}", views=1000, is_short=False, days_ago=20 + i)
+    _channel(db, "UCb")
+    for i in range(12):
+        _video(db, "UCb", f"b{i}", views=2000, is_short=False, days_ago=20 + i)
+    c = _pct_client(db)
+
+    single = c.get("/api/channels/UCa/distribution?format=long")
+    assert single.status_code == 200
+    body = single.json()
+    assert body["channel_id"] == "UCa" and body["count"] == 12
+    assert len(body["bucket_edges"]) == len(body["buckets"]) + 1
+
+    batch = c.get("/api/channels/distribution?channel_ids=UCa,UCb&format=long")
+    assert batch.status_code == 200
+    m = batch.json()
+    assert set(m) == {"UCa", "UCb"} and m["UCa"]["count"] == 12 and m["UCb"]["count"] == 12
+
+
+def test_distribution_endpoint_validates_format_and_channel(tmp_path):
+    db = _db(tmp_path)
+    _channel(db, "UCa")
+    c = _pct_client(db)
+    assert c.get("/api/channels/UCa/distribution?format=bogus").status_code == 400
+    assert c.get("/api/channels/UCmissing/distribution?format=long").status_code == 404
+    # The batch skips unknown ids rather than 404-ing the whole page.
+    assert c.get("/api/channels/distribution?channel_ids=UCmissing&format=long").json() == {}

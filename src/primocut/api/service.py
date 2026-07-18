@@ -22,6 +22,7 @@ def list_videos(s: Session, project_id: int) -> list[dict[str, Any]]:
             "id": v.id, "title": v.title, "channel": v.channel, "status": v.status,
             "progress": job.progress if job else 0,
             "stage": job.stage if job else "",
+            "topics": len(repo.get_topic_rows(s, v.id)),
             "created_at": v.created_at.isoformat(),
         })
     return out

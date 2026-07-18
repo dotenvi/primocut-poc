@@ -120,6 +120,25 @@ class Cadence:
     duration_by_format: dict[str, dict[str, float]]
 
 
+# Number of bars in the "channel spread" strip. Fixed so the same distribution
+# renders identically wherever it appears (Radar card, video detail).
+SPREAD_BUCKETS = 28
+
+
+@dataclass(frozen=True)
+class SpreadHistogram:
+    """A view-count histogram of a channel-format window: `counts[i]` peers fall
+    in `[edges[i], edges[i+1])`. `edges` has `len(counts) + 1` entries spanning
+    `[0, max]`, so a consumer maps any view count to a bar by its edges. `n` is
+    the window size; `min`/`max` the observed view range."""
+
+    counts: list[int]
+    edges: list[float]
+    min: float
+    max: float
+    n: int
+
+
 # ------------------------- helpers -------------------------
 
 
@@ -160,6 +179,34 @@ def nearest_rank_percentile(values: Sequence[float], q: float) -> float | None:
     rank = math.ceil((q / 100.0) * len(vals))
     rank = max(1, min(rank, len(vals)))
     return vals[rank - 1]
+
+
+def spread_histogram(
+    values: Sequence[float], *, buckets: int = SPREAD_BUCKETS
+) -> SpreadHistogram | None:
+    """Bucket a window's view counts into `buckets` equal-width bars over `[0, max]`.
+
+    Linear over `[0, max]` (not `[min, max]`) on purpose: the story a channel
+    spread tells is exactly that the typical videos cluster low and a rare one
+    sits far in the tail — an absolute origin keeps that shape honest and keeps
+    two videos of the same channel comparable. `None` for an empty input.
+    """
+    vals = [float(v) for v in values if v is not None]
+    if not vals:
+        return None
+    lo, hi = 0.0, max(vals)
+    if hi <= lo:  # a window of all-zero views: one unit wide so edges are valid
+        hi = 1.0
+    width = (hi - lo) / buckets
+    edges = [lo + width * i for i in range(buckets + 1)]
+    counts = [0] * buckets
+    for v in vals:
+        idx = int((v - lo) / width)
+        idx = max(0, min(idx, buckets - 1))  # the max value lands in the last bar
+        counts[idx] += 1
+    return SpreadHistogram(
+        counts=counts, edges=edges, min=min(vals), max=max(vals), n=len(vals)
+    )
 
 
 def wilson_interval(hits: int, n: int, z: float) -> tuple[float, float]:

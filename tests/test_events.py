@@ -162,6 +162,10 @@ def test_a_channel_in_two_projects_is_one_row_with_two_badges(tmp_path):
     badges = sorted(b["name"] for b in body[0]["projects"])
     assert badges == ["Niche A", "Niche B"]
     assert body[0]["video_id"] == "v1"
+    # The feed is self-descriptive: the card names the video, resolved on read
+    # (the payload never stored a title). The channel key is present too.
+    assert body[0]["title"] == "Target"
+    assert "channel_title" in body[0]
 
 
 def test_the_feed_can_be_scoped_to_a_single_project(tmp_path):

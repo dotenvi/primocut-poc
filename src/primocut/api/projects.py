@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..db import competitors as crepo
+from ..db import repo
+from ..metrics import service as metrics_service
 from ..youtube.client import YouTubeError
 
 
@@ -101,18 +103,30 @@ def build_projects_router(
     def list_projects(db=Depends(get_db)) -> list[dict]:
         with db.session() as s:
             return [
-                {**_project_dict(p), "channel_count": len(crepo.list_project_channels(s, p.id))}
+                {
+                    **_project_dict(p),
+                    "channel_count": len(crepo.list_project_channels(s, p.id)),
+                    "live_count": len(repo.list_project_lives(s, p.id)),
+                }
                 for p in crepo.list_projects(s)
             ]
 
     @router.get("/projects/{project_id}")
-    def project_detail(project_id: int, db=Depends(get_db)) -> dict:
+    def project_detail(
+        project_id: int, db=Depends(get_db), settings=Depends(get_settings_dep)
+    ) -> dict:
         with db.session() as s:
             row = crepo.get_project(s, project_id)
             if row is None:
                 raise HTTPException(status_code=404, detail="project not found")
             channels = [_channel_dict(c) for c in crepo.list_project_channels(s, project_id)]
-            return {**_project_dict(row), "channels": channels}
+            # The Settings page renders the outlier bands read-only from here —
+            # bands are global config, not a per-project override.
+            return {
+                **_project_dict(row),
+                "channels": channels,
+                "band_config": metrics_service.band_config(settings),
+            }
 
     @router.patch("/projects/{project_id}")
     def patch_project(project_id: int, body: ProjectPatch, db=Depends(get_db)) -> dict:

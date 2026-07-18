@@ -33,7 +33,7 @@ def _naive(ts: datetime | None) -> datetime | None:
     return ts.astimezone(timezone.utc).replace(tzinfo=None) if ts.tzinfo else ts
 
 
-def _event_dict(row, badges: dict[str, list[dict]]) -> dict[str, Any]:
+def _event_dict(row, badges, vtitles, ctitles, ltitles) -> dict[str, Any]:
     return {
         "id": row.id,
         "category": row.category,
@@ -49,12 +49,19 @@ def _event_dict(row, badges: dict[str, list[dict]]) -> dict[str, Any]:
         "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
         # Project badges resolved on read (empty for a channel no project tracks).
         "projects": badges.get(row.channel_id, []),
+        # A card names the thing that happened: the competitor video (niche) or the
+        # live (ops), plus the channel. Resolved on read — the payload stays lean.
+        "title": vtitles.get(row.video_id) or ltitles.get(row.live_id),
+        "channel_title": ctitles.get(row.channel_id),
     }
 
 
 def _serialise(s, rows) -> list[dict]:
     badges = erepo.projects_for_channels(s, [r.channel_id for r in rows])
-    return [_event_dict(r, badges) for r in rows]
+    vtitles = erepo.video_titles(s, [r.video_id for r in rows])
+    ctitles = erepo.channel_titles(s, [r.channel_id for r in rows])
+    ltitles = erepo.live_titles(s, [r.live_id for r in rows])
+    return [_event_dict(r, badges, vtitles, ctitles, ltitles) for r in rows]
 
 
 def build_events_router(*, get_db: Callable) -> APIRouter:

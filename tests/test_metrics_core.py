@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from primocut.metrics.core import (
+    SPREAD_BUCKETS,
     Snap,
     VideoMeta,
     band_ruler,
@@ -19,6 +20,7 @@ from primocut.metrics.core import (
     packaging_impact,
     parse_cutoffs,
     resurgence,
+    spread_histogram,
     vph_series,
     wilson_interval,
 )
@@ -109,6 +111,41 @@ def test_nearest_rank_collapses_top_cutoffs_at_min_sample():
     assert nearest_rank_percentile(vals, 99) == 10.0
     assert nearest_rank_percentile(vals, 0) == 1.0
     assert nearest_rank_percentile([], 90) is None
+
+
+# ------------------------- channel spread histogram -------------------------
+
+
+def test_spread_histogram_shape_and_counts():
+    hist = spread_histogram([0, 25, 50, 75, 100], buckets=4)
+    assert len(hist.counts) == 4
+    assert len(hist.edges) == 5
+    # Half-open [lo, hi) bars over [0, 100]: 0→bar0, 25→bar1, 50→bar2, 75→bar3,
+    # and the max (100) is clamped into the last bar rather than a phantom fifth.
+    assert hist.edges == [0.0, 25.0, 50.0, 75.0, 100.0]
+    assert hist.counts == [1, 1, 1, 2]
+    assert hist.min == 0.0 and hist.max == 100.0 and hist.n == 5
+
+
+def test_spread_histogram_puts_a_lone_viral_in_the_tail():
+    # Typical videos cluster near zero; one viral pins the max and sits far right.
+    peers = [1000] * 20 + [100_000]
+    hist = spread_histogram(peers)
+    assert len(hist.counts) == SPREAD_BUCKETS
+    assert hist.counts[0] == 20  # the cluster
+    assert hist.counts[-1] == 1  # the viral, alone in the last bar
+    assert sum(hist.counts) == 21
+
+
+def test_spread_histogram_empty_is_none():
+    assert spread_histogram([]) is None
+    assert spread_histogram([None, None]) is None
+
+
+def test_spread_histogram_all_zero_views_is_valid():
+    hist = spread_histogram([0, 0, 0], buckets=4)
+    assert hist.counts == [3, 0, 0, 0]
+    assert hist.max == 0.0 and hist.edges[-1] == 1.0
 
 
 def test_wilson_interval_keeps_width_at_extremes():

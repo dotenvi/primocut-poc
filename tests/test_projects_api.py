@@ -176,3 +176,29 @@ def test_detach_channel_preserves_data(tmp_path):
     with db.session() as s:
         assert crepo.count_channel_videos(s, "UCchan0000000000000000") == 1
         assert crepo.get_channel(s, "UCchan0000000000000000").active is False
+
+
+def test_projects_list_carries_live_and_channel_counts(tmp_path):
+    from primocut.db.models import VideoRow
+
+    db = _db(tmp_path)
+    c = _client(db)
+    pid = c.post("/api/projects", json={"name": "Niche"}).json()["id"]
+    with db.session() as s:
+        s.add(VideoRow(id="v1", project_id=pid, url="u", status="done"))
+        s.add(VideoRow(id="v2", project_id=pid, url="u", status="queued"))
+
+    row = c.get("/api/projects").json()[0]
+    # The sidebar tree reads both counts from the list — no per-project fan-out.
+    assert row["live_count"] == 2 and row["channel_count"] == 0
+
+
+def test_project_detail_exposes_readonly_band_config(tmp_path):
+    db = _db(tmp_path)
+    c = _client(db)
+    pid = c.post("/api/projects", json={"name": "Niche"}).json()["id"]
+
+    bc = c.get(f"/api/projects/{pid}").json()["band_config"]
+    # Read-only echo of the global default (percentile 90/97/99) for the Settings UI.
+    assert bc["basis"] == "percentile"
+    assert bc["cutoffs"] == {"relevant": 90.0, "strong": 97.0, "exceptional": 99.0}

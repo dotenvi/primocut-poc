@@ -17,7 +17,14 @@ from datetime import datetime
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
-from .models import EventRow, ProjectChannelRow, ProjectRow
+from .models import (
+    CompetitorChannelRow,
+    CompetitorVideoRow,
+    EventRow,
+    ProjectChannelRow,
+    ProjectRow,
+    VideoRow,
+)
 
 CATEGORY_NICHE = "niche"
 CATEGORY_OPS = "ops"
@@ -94,6 +101,31 @@ def projects_for_channels(
     for channel_id, project_id, name in rows:
         out[channel_id].append({"id": project_id, "name": name})
     return dict(out)
+
+
+def _titles(s, id_col, title_col, ids) -> dict[str, str]:
+    keys = [i for i in {x for x in ids if x}]
+    if not keys:
+        return {}
+    result = s.execute(select(id_col, title_col).where(id_col.in_(keys))).all()
+    return {k: t for k, t in result}
+
+
+def video_titles(s: Session, video_ids: list[str]) -> dict[str, str]:
+    """Competitor-video titles for a page of niche events (one batched query), so
+    a `outlier_crossed` card can name the video its payload only referenced by id."""
+    return _titles(s, CompetitorVideoRow.video_id, CompetitorVideoRow.title, video_ids)
+
+
+def channel_titles(s: Session, channel_ids: list[str]) -> dict[str, str]:
+    """Competitor-channel titles for a page of events (one batched query)."""
+    return _titles(s, CompetitorChannelRow.channel_id, CompetitorChannelRow.title, channel_ids)
+
+
+def live_titles(s: Session, live_ids: list[str]) -> dict[str, str]:
+    """Live titles for the ops alerts (one batched query) — a `pipeline_failed`
+    card names the live, which lives in `videos`, not `competitor_videos`."""
+    return _titles(s, VideoRow.id, VideoRow.title, live_ids)
 
 
 # ------------------------- feed reads (bounded, index-backed) -------------------------

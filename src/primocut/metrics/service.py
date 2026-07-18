@@ -82,6 +82,32 @@ def _band_config(settings: Settings) -> tuple[str, dict[str, float]]:
     return basis, core.parse_cutoffs(spec)
 
 
+def _window_peers(videos, views_by_id, *, is_short: bool, settings: Settings, now: datetime):
+    """The same-format rolling window that feeds the band ruler: the smaller of
+    "the last N videos" and "the last D days", scored videos only. This is the
+    single definition of the peer set — the ruler and the spread histogram both
+    read it, so a channel's classification and its distribution never diverge."""
+    window_cut = now - timedelta(days=settings.outlier_window_days)
+    peers = [
+        v for v in videos
+        if v.is_short == is_short
+        and v.published_at is not None
+        and v.published_at >= window_cut
+        and v.video_id in views_by_id
+    ]
+    peers.sort(key=lambda v: v.published_at, reverse=True)
+    return peers[: settings.outlier_window_videos]
+
+
+def band_config(settings=None) -> dict:
+    """The active outlier band configuration (global, read-only) for the Settings
+    UI: the basis and the three ordinal cutoffs. There is no per-project override —
+    bands are a pure per-channel metric (see `band_ruler`)."""
+    settings = settings or get_settings()
+    basis, cutoffs = _band_config(settings)
+    return {"basis": basis, "cutoffs": cutoffs}
+
+
 def _channel_scores(
     session, channel_id: str, *, settings: Settings, now: datetime
 ) -> tuple[dict[str, _Scored], dict[str, core.BandRuler | None]]:
@@ -95,19 +121,10 @@ def _channel_scores(
     views_by_id = crepo.latest_views(session, [v.video_id for v in videos])
     basis, cutoffs = _band_config(settings)
     provisional_cut = now - timedelta(days=settings.outlier_provisional_days)
-    window_cut = now - timedelta(days=settings.outlier_window_days)
 
     rulers: dict[str, core.BandRuler | None] = {}
     for fmt, is_short in FORMATS:
-        peers = [
-            v for v in videos
-            if v.is_short == is_short
-            and v.published_at is not None
-            and v.published_at >= window_cut
-            and v.video_id in views_by_id
-        ]
-        peers.sort(key=lambda v: v.published_at, reverse=True)
-        peers = peers[: settings.outlier_window_videos]
+        peers = _window_peers(videos, views_by_id, is_short=is_short, settings=settings, now=now)
         rulers[fmt] = core.band_ruler(
             [views_by_id[v.video_id] for v in peers],
             basis=basis, cutoffs=cutoffs, min_sample=settings.outlier_min_sample,
@@ -149,6 +166,83 @@ def _outlier_payload(sc: _Scored, *, with_channel: bool = False, vph: float | No
     if with_channel:
         out["channel_id"] = sc.channel_id
         out["current_vph"] = vph
+    return out
+
+
+# ------------------------- channel spread distribution -------------------------
+
+
+def _distribution_payload(
+    channel_id: str, fmt: str, peer_views: list[int], *, settings: Settings
+) -> dict:
+    """The "channel spread" strip for one channel+format: the histogram of the
+    window's view counts plus the band thresholds, so the same render marks any
+    video by its own view count. No per-video snapshot scan — the caller passes
+    the already-fetched window views."""
+    basis, cutoffs = _band_config(settings)
+    ruler = core.band_ruler(
+        peer_views, basis=basis, cutoffs=cutoffs, min_sample=settings.outlier_min_sample
+    )
+    hist = core.spread_histogram(peer_views)
+    return {
+        "channel_id": channel_id,
+        "format": fmt,
+        "count": len(peer_views),
+        "basis": basis,
+        "median": ruler.median if ruler else None,
+        "thresholds": ruler.thresholds if ruler else None,
+        "min": hist.min if hist else None,
+        "max": hist.max if hist else None,
+        "buckets": hist.counts if hist else [],
+        "bucket_edges": hist.edges if hist else [],
+    }
+
+
+def channel_distribution(
+    session, channel_id: str, *, fmt: str, settings=None, now=None
+) -> dict | None:
+    """One channel's spread for `fmt` ('long'|'short'). `None` if the channel is
+    unknown. Two queries (videos + latest views) — never scans snapshots."""
+    settings = settings or get_settings()
+    now = _now(now)
+    if crepo.get_channel(session, channel_id) is None:
+        return None
+    videos = crepo.list_channel_videos(session, channel_id)
+    views_by_id = crepo.latest_views(session, [v.video_id for v in videos])
+    peers = _window_peers(
+        videos, views_by_id, is_short=(fmt == "short"), settings=settings, now=now
+    )
+    return _distribution_payload(
+        channel_id, fmt, [views_by_id[v.video_id] for v in peers], settings=settings
+    )
+
+
+def channel_distributions(
+    session, channel_ids, *, fmt: str, settings=None, now=None
+) -> dict[str, dict]:
+    """Batch spread for the Radar: `channel_id -> distribution` for every known
+    id. Query count is bounded by the number of channels — one video list per
+    channel plus a SINGLE batched `latest_views` over their union — and never
+    grows with videos-per-channel, so a Radar page is free of N+1 and of any
+    snapshot scan. Unknown ids are skipped."""
+    settings = settings or get_settings()
+    now = _now(now)
+    is_short = fmt == "short"
+    videos_by_channel: dict[str, list] = {}
+    all_ids: list[str] = []
+    for cid in channel_ids:
+        if crepo.get_channel(session, cid) is None:
+            continue
+        vids = crepo.list_channel_videos(session, cid)
+        videos_by_channel[cid] = vids
+        all_ids.extend(v.video_id for v in vids)
+    views_by_id = crepo.latest_views(session, all_ids)
+    out: dict[str, dict] = {}
+    for cid, vids in videos_by_channel.items():
+        peers = _window_peers(vids, views_by_id, is_short=is_short, settings=settings, now=now)
+        out[cid] = _distribution_payload(
+            cid, fmt, [views_by_id[v.video_id] for v in peers], settings=settings
+        )
     return out
 
 
