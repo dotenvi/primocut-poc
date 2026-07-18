@@ -1,0 +1,19 @@
+-- Add the anti-flapping band guard to the competitor video row.
+--
+-- The `outlier_crossed` event is emitted only on a transition to a strictly
+-- higher band than the one last emitted, and that "last emitted" band is stored
+-- here (see the Event model and the emission rule). The column was added to the
+-- ORM alongside the append-only events table but shipped without this migration,
+-- so a database created before that change is missing the column while the model
+-- selects it -- every read of competitor_videos then fails with "no such column".
+--
+-- An empty default backfills every pre-existing row correctly: none of them had
+-- emitted a crossing yet, which is exactly what an empty band means.
+--
+-- NOTE the migration splitter naively breaks the file on the semicolon
+-- character, so comments here must not contain one.
+--
+-- Fresh databases already have this column from create_all, so the migration
+-- runner tolerates the resulting duplicate-column error and treats it as
+-- already applied.
+ALTER TABLE competitor_videos ADD COLUMN last_band_emitted VARCHAR DEFAULT ''
