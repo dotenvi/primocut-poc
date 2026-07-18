@@ -17,9 +17,11 @@ projects_app = typer.Typer(help="Manage competitor projects", no_args_is_help=Tr
 competitors_app = typer.Typer(
     help="Manage competitor channels within a project", no_args_is_help=True
 )
+lives_app = typer.Typer(help="Submit and list lives within a project", no_args_is_help=True)
 metrics_app = typer.Typer(help="Competitor metrics (computed on read)", no_args_is_help=True)
 app.add_typer(projects_app, name="projects")
 app.add_typer(competitors_app, name="competitors")
+app.add_typer(lives_app, name="lives")
 app.add_typer(metrics_app, name="metrics")
 
 
@@ -395,6 +397,65 @@ def competitors_snapshot(
         f"{result['packaging_changes']} packaging change(s), "
         f"{result['quota_units']} quota unit(s)."
     )
+
+
+@lives_app.command("add")
+def lives_add(
+    url: str = typer.Argument(..., help="YouTube live URL"),
+    project: int = typer.Option(..., "--project", "-p", help="Project ID"),
+) -> None:
+    """Submit a live to the pipeline, contained in a project (niche)."""
+    setup_logging()
+    from .db import get_database
+    from .worker.queue import QueueUnavailableError, enqueue_video
+
+    settings = get_settings()
+    database = get_database(settings)
+    try:
+        result = enqueue_video(url, project_id=project, settings=settings, database=database)
+    except KeyError:
+        console.print(f"[red]Project #{project} not found.[/red]")
+        raise typer.Exit(code=1)
+    except ValueError as exc:
+        console.print(f"[red]Invalid URL:[/red] {exc}")
+        raise typer.Exit(code=1)
+    except QueueUnavailableError as exc:
+        console.print(
+            f"[red]Could not queue the live:[/red] {exc}\n"
+            f"Is Redis running at {settings.redis_url}?"
+        )
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"[green]Submitted[/green] {result['video_id']} to project #{project} "
+        f"(job {result['job_id']}, rq {result['rq_job_id']})."
+    )
+
+
+@lives_app.command("list")
+def lives_list(
+    project: int = typer.Option(..., "--project", "-p", help="Project ID"),
+) -> None:
+    """List the lives of a project with their pipeline status."""
+    setup_logging()
+    from .db import competitors as crepo
+    from .db import get_database
+    from .db import repo
+
+    settings = get_settings()
+    database = get_database(settings)
+    with database.session() as s:
+        if crepo.get_project(s, project) is None:
+            console.print(f"[red]Project #{project} not found.[/red]")
+            raise typer.Exit(code=1)
+        lives = repo.list_project_lives(s, project)
+        table = Table(title=f"Lives — project #{project}")
+        table.add_column("Video ID", style="bold")
+        table.add_column("Title")
+        table.add_column("Status")
+        for v in lives:
+            table.add_row(v.id, v.title or "—", v.status)
+    console.print(table)
 
 
 @metrics_app.command("refresh")
