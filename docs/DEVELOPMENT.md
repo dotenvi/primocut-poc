@@ -536,7 +536,8 @@ aggregation** (spelling variants merge; another project never leaks in), and —
 
 Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations`, the Phase 2
 foundation `projects, competitor_channels, project_channels, competitor_videos`, the
-collection time series `channel_snapshots, video_snapshots, packaging_changes`, the metrics
+collection time series `channel_snapshots, video_snapshots, packaging_changes`, the append-only
+Radar log `events`, the metrics
 artifact `video_attributes` (persisted packaging features, unique per `(video_id, source)`:
 `syntactic` = free/deterministic, `title_llm`/`thumbnail_llm` = the opt-in AI enrichment, each
 content-hash gated and carrying its own `state`/`error`), and the comment pair
@@ -546,9 +547,15 @@ automatically — the collection state lives on `competitor_videos.comments_stat
 `comment_synthesis`; same content-hash/`state`/`error` contract as `video_attributes`, but a
 **separate table on purpose** — `metrics.patterns` reports every boolean of an attributes row
 as a packaging pattern, and a narrative synthesis must not reach the distributions).
+The append-only `events` table (index `(category, occurred_at DESC)`) is the Radar fact log:
+niche facts (channel-scoped, `project_id` NULL, attributed on read) and ops failures
+(project-scoped, `severity=error`, cleared via `resolved_at`). It is the one derived-figure
+exception to "computed on read" — a threshold crossing is a moment a recompute would erase, so
+it is recorded when it happens (see §Radar events below). `competitor_videos.last_band_emitted`
+backs the anti-flapping guard.
 Outlier scores, VPH, resurgence and pattern distributions are computed on read over the
 snapshots — never stored; the only persisted derived figures are `video_attributes`,
-`video_enrichments` and `packaging_changes.vph_before/after`.
+`video_enrichments`, `packaging_changes.vph_before/after` and the `events` crossing facts.
 Simple migrations: base schema via `create_all` (v1) + `db/migrations/NNN_*.sql` deltas.
 The runner tolerates a duplicate-column error on `ADD COLUMN`, so column-adding deltas are
 no-ops on fresh databases (where `create_all` already added the column from the model).
@@ -576,11 +583,15 @@ carry only the imperative deltas.
   minute. Selection: `all` → every video of active channels; `recent` → the same, filtered to
   `published_at >= now - youtube_recent_days`. One `YouTubeClient` per cycle gives a per-cycle
   quota total (logged); channels are processed in isolation. After the channel loop the cycle
-  runs two **sibling steps**, each isolated: the metrics artifacts (deterministic, offline) and
-  the **comment collection** (network + quota, hence not folded into the first). The latter is
-  **level-triggered** — it asks `definitive_outlier_ids_for_channel` who qualifies *now* and
-  skips whatever `comments_state` settles — because guideline 10 stores no score to detect a
-  rising edge with. Code: `worker/scheduler.py`, `worker/snapshot_jobs.py`,
+  runs three **isolated steps**: the metrics artifacts (deterministic, offline); **event
+  emission** (`worker/event_emission.py`) that records `outlier_crossed` for videos stepping up
+  a band, the **single** crossing-detection point, with the anti-flapping guard; and the
+  **comment collection** (network + quota), which is now a **consumer** of those events — it
+  reads the videos with an `outlier_crossed` event and skips whatever `comments_state` settles,
+  so there is one source of truth instead of two detectors. It still retries an `"error"` video
+  even without a fresh crossing (`comments_state` is non-terminal). Finally the cycle appends a
+  born-resolved `cycle_done` event carrying the quota accounting the activity log reports. Code:
+  `worker/scheduler.py`, `worker/snapshot_jobs.py`, `worker/event_emission.py`,
   `worker/comment_collection.py`.
 
 - `Video.status`: `queued → downloading → transcribing → analyzing → done | error`;
@@ -634,6 +645,15 @@ inside the request):
 |---|---|---|
 | POST | `/api/channels/{cid}/videos/{vid}/enrich` `{kind, regenerate?}` | enrich one video's `thumbnail`/`title`, or synthesise its `comments` (202; 400 on an unknown kind, or on `regenerate` for a packaging kind — it has nothing to re-fetch) |
 | POST | `/api/projects/{pid}/enrich` `{kind}` | enrich the project's **definitive outliers** (202; returns how many were queued) |
+
+Phase 2 Radar (the append-only event log; reads are bounded and index-backed):
+
+| Method | Route | Action |
+|---|---|---|
+| GET | `/api/events?category=niche&project_id=&since=&limit=` | niche feed, newest-first, each event carrying its project **badges** (resolved on read); `since` is a lower bound, `project_id` scopes to that project's channels |
+| GET | `/api/alerts` | open operational failures (`category='ops' AND resolved_at IS NULL`) |
+| GET | `/api/activity` `?limit=&before_id=` | full paginated log (`next_before_id` cursor) + `quota_units` accounting summed from `cycle_done` events |
+| POST | `/api/events/seen` `{ids?, until?}` | mark niche events seen by id set and/or up to a timestamp; ops events are never marked (they resolve, not dismiss) |
 
 ### Golden rule — timestamps are never invented
 

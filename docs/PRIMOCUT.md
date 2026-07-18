@@ -57,7 +57,8 @@ Given competitor channels supplied by the user (no niche-wide discovery), groupe
 
 [SQLite] ← metadata, jobs, transcripts, topics, chat signals,
            projects, competitor channels/videos, snapshots,
-           packaging changes, attributes, comments, enrichments
+           packaging changes, attributes, comments, enrichments,
+           events (append-only Radar log)
 [Temp dir] ← audio files (per job, discarded when the job ends)
 ```
 
@@ -97,8 +98,19 @@ Competitor modeling:
 - **VideoAttributes**: video_id, source (syntactic|title_llm|thumbnail_llm), attributes JSON, content_hash
 - **VideoComments**: video_id, comment_id, text, like_count, author, fetched_at (top comments of outliers, collected automatically)
 - **VideoEnrichment**: video_id, kind (comment_synthesis), payload JSON, content_hash — kept apart from VideoAttributes so a narrative synthesis never counts as a packaging pattern
+- **Event** (append-only): id, category (niche|ops), type, severity (info|error), project_id, channel_id, video_id, live_id, occurred_at, payload JSON, seen_at, resolved_at — index (category, occurred_at DESC). The historical fact log behind the Radar home (below). CompetitorVideo also gains **last_band_emitted** for the emission guard.
 
-Outlier scores and VPH are computed on read (over snapshots), never stored.
+Outlier scores and VPH are computed on read (over snapshots), never stored — but the *moment* a threshold was crossed is a fact that a recompute would erase, so it is recorded once, when it happens, in **Event**.
+
+### Radar (events — delivered)
+
+An outlier score does not survive a recompute: "crossed p90 yesterday at 14h" would vanish the moment the video drops a band. The **Event** table is the append-only record of those facts, read by the Radar feed (a daily "what happened since yesterday").
+
+- **Emission rule (`outlier_crossed`, anti-flapping)**: a crossing is emitted **only on a transition to a strictly higher band** than the one last emitted (`competitor_videos.last_band_emitted`). A video climbing p90→p97→p99 emits three events, one per rung; a video oscillating around the p90 cut emits exactly one. A provisional (< 7-day) crossing is emitted with `provisional=true`; because the guard tracks the highest band emitted, it re-emits only on a genuine step up as it matures. This runs in the snapshot cycle and is the **single** crossing-detection point.
+- **One source of truth**: automatic comment collection is a **consumer** of `outlier_crossed` (it no longer re-detects), removing the old risk of collecting twice or never.
+- **Niche vs ops**: niche events are channel facts written once with `project_id` NULL, attributed to projects **on read** by joining `project_channels` — a channel in two projects yields one row rendered with two badges, never a duplicate. Ops events are project-scoped failures (severity=error) that clear via `resolved_at` and are never marked "seen" (a failure does not resolve by being looked at); niche events carry a dismissible `seen_at`.
+- **Endpoints**: `GET /api/events?category=niche&project_id=&since=&limit=` (feed with badges), `GET /api/alerts` (open ops), `GET /api/activity` (full paginated log + quota accounting), `POST /api/events/seen` (mark a set of ids or everything up to a timestamp).
+- Producers wired today: `outlier_crossed`, `packaging_changed`, and the per-cycle `cycle_done` (quota accounting). Planned producers: `resurgence`, `packaging_verdict`, `backfill_done`, and the ops events (`pipeline_failed`, `comments_disabled`, `quota_exhausted`).
 
 ## Technical guidelines
 
