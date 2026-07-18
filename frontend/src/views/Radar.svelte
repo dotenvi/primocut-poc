@@ -14,6 +14,11 @@
   let error = ''
   let loaded = false
 
+  const newPageSize = 6 // "New" cards are tall — keep the actionable feed short
+  const seenPageSize = 15 // "seen" rows are compact, so a page holds more
+  let newPage = 1 // pager for the "New" (unseen) feed
+  let seenPage = 1 // pager for the "Earlier · seen" feed
+
   // "Nothing new since <last visit>" — the moment the user last cleared the feed.
   let lastVisit = localStorage.getItem('primocut:lastSeen') || ''
 
@@ -58,6 +63,8 @@
 
   async function setFilter(f) {
     filter = f
+    newPage = 1
+    seenPage = 1
     await load()
   }
 
@@ -96,6 +103,15 @@
   $: unseen = events.filter((e) => !e.seen_at)
   $: seen = events.filter((e) => e.seen_at)
   const key = (ev) => (ev.projects?.[0]?.name || ev.channel_title || '')
+
+  // Two independent feeds, each paginated on its own — a page shows at most
+  // `pageSize` items, and each feed carries its own pager.
+  $: newTotalPages = Math.max(1, Math.ceil(unseen.length / newPageSize))
+  $: seenTotalPages = Math.max(1, Math.ceil(seen.length / seenPageSize))
+  $: if (newPage > newTotalPages) newPage = newTotalPages // clamp when a feed shrinks
+  $: if (seenPage > seenTotalPages) seenPage = seenTotalPages
+  $: newItems = unseen.slice((newPage - 1) * newPageSize, newPage * newPageSize)
+  $: seenItems = seen.slice((seenPage - 1) * seenPageSize, seenPage * seenPageSize)
 </script>
 
 <div class="flex items-end justify-between gap-3 mb-5">
@@ -148,9 +164,30 @@
     </p>
   </div>
 {:else}
+  {#snippet pager(current, total, onchange)}
+    {#if total > 1}
+      <div class="flex items-center gap-2 text-ink-3">
+        <button
+          class="px-1 leading-none hover:text-ink disabled:opacity-30 disabled:hover:text-ink-3 cursor-pointer"
+          aria-label="Previous page"
+          disabled={current === 1}
+          on:click={() => onchange(current - 1)}>‹</button>
+        <span class="m tabular-nums">{current} / {total}</span>
+        <button
+          class="px-1 leading-none hover:text-ink disabled:opacity-30 disabled:hover:text-ink-3 cursor-pointer"
+          aria-label="Next page"
+          disabled={current === total}
+          on:click={() => onchange(current + 1)}>›</button>
+      </div>
+    {/if}
+  {/snippet}
+
   {#if unseen.length}
-    <div class="lbl mb-2">New</div>
-    {#each unseen as ev (ev.id)}
+    <div class="flex items-center justify-between gap-3 mb-2">
+      <div class="lbl">New · {unseen.length}</div>
+      {@render pager(newPage, newTotalPages, (p) => (newPage = p))}
+    </div>
+    {#each newItems as ev (ev.id)}
       {@const tag = eventTag(ev)}
       {@const dist = distFor(ev)}
       <div
@@ -192,8 +229,11 @@
   {/if}
 
   {#if seen.length}
-    <div class="lbl mt-6 mb-2">Earlier · seen</div>
-    {#each seen as ev (ev.id)}
+    <div class="flex items-center justify-between gap-3 mt-6 mb-2">
+      <div class="lbl">Earlier · seen · {seen.length}</div>
+      {@render pager(seenPage, seenTotalPages, (p) => (seenPage = p))}
+    </div>
+    {#each seenItems as ev (ev.id)}
       {@const tag = eventTag(ev)}
       <div
         class="ev seen"
