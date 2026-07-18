@@ -79,3 +79,32 @@ export function shortDate(iso) {
 }
 
 export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+// Parse a naive-UTC ISO string (SQLite drops tzinfo) into a Date, treating a
+// bare timestamp as UTC. Returns null for empty/invalid input.
+export function parseUtc(iso) {
+  if (!iso) return null
+  const d = new Date(iso.endsWith('Z') || /[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z')
+  return isNaN(d) ? null : d
+}
+
+// Compact relative time, e.g. "4h ago", "2d ago", "just now". '' for null.
+export function timeAgo(iso, now = Date.now()) {
+  const d = parseUtc(iso)
+  if (!d) return ''
+  const secs = Math.max(0, Math.round((now - d.getTime()) / 1000))
+  if (secs < 60) return 'just now'
+  const mins = Math.floor(secs / 60)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
+
+// HH:MM (local) from a naive-UTC ISO string — the Activity log's time column.
+export function hhmm(iso) {
+  const d = parseUtc(iso)
+  if (!d) return ''
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}

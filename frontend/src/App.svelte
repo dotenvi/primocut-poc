@@ -1,55 +1,47 @@
 <script>
-  import Submit from './views/Submit.svelte'
-  import Videos from './views/Videos.svelte'
-  import Report from './views/Report.svelte'
-  import Competitors from './views/Competitors.svelte'
+  import { parseRoute } from './lib/router.js'
+  import Sidebar from './components/Sidebar.svelte'
+  import Radar from './views/Radar.svelte'
+  import Activity from './views/Activity.svelte'
+  import Lives from './views/Lives.svelte'
+  import CutRoom from './views/CutRoom.svelte'
+  import Niche from './views/Niche.svelte'
+  import VideoDetail from './views/VideoDetail.svelte'
+  import ChannelDashboard from './views/ChannelDashboard.svelte'
+  import Settings from './views/Settings.svelte'
 
-  let route = location.hash.slice(1) || '/'
+  let route = parseRoute(location.hash)
   window.addEventListener('hashchange', () => {
-    route = location.hash.slice(1) || '/'
+    route = parseRoute(location.hash)
+    window.scrollTo(0, 0)
   })
+
+  // Identity that, when it changes, should remount the view (views load on mount).
+  $: key = `${route.view}/${route.pid || ''}/${route.lid || route.vid || route.cid || ''}`
 </script>
 
-<aside class="sidebar">
-  <a href="#/" class="brand">
-    <img src="/logo.png" alt="" class="brand-logo" />
-    PRIMOCUT
-  </a>
-  <nav>
-    <a href="#/" class:active={route === '/'}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-        <polyline points="17 8 12 3 7 8" />
-        <line x1="12" y1="3" x2="12" y2="15" />
-      </svg>
-      Submit
-    </a>
-    <a href="#/videos" class:active={route === '/videos'}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="m22 8-6 4 6 4V8Z" />
-        <rect x="2" y="6" width="14" height="12" rx="2" ry="2" />
-      </svg>
-      Videos
-    </a>
-    <a href="#/projects" class:active={route.startsWith('/projects')}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <line x1="18" y1="20" x2="18" y2="10" />
-        <line x1="12" y1="20" x2="12" y2="4" />
-        <line x1="6" y1="20" x2="6" y2="14" />
-      </svg>
-      Competitors
-    </a>
-  </nav>
-</aside>
+<div class="grid grid-cols-[236px_1fr] min-h-screen max-[960px]:grid-cols-1">
+  <Sidebar {route} />
 
-<main class:report={route.startsWith('/report/')} class:projects={route.startsWith('/projects')}>
-  {#if route.startsWith('/report/')}
-    <Report id={route.split('/')[2]} />
-  {:else if route.startsWith('/projects')}
-    <Competitors {route} />
-  {:else if route === '/videos'}
-    <Videos />
-  {:else}
-    <Submit />
-  {/if}
-</main>
+  <main class="px-7 pt-6 pb-16 max-w-[1160px] w-full">
+    {#key key}
+      {#if route.view === 'radar'}
+        <Radar />
+      {:else if route.view === 'activity'}
+        <Activity />
+      {:else if route.view === 'lives'}
+        <Lives pid={route.pid} />
+      {:else if route.view === 'cutroom'}
+        <CutRoom pid={route.pid} lid={route.lid} />
+      {:else if route.view === 'niche'}
+        <Niche pid={route.pid} tab={route.tab} />
+      {:else if route.view === 'video'}
+        <VideoDetail pid={route.pid} cid={route.cid} vid={route.vid} />
+      {:else if route.view === 'channel'}
+        <ChannelDashboard pid={route.pid} cid={route.cid} />
+      {:else if route.view === 'settings'}
+        <Settings pid={route.pid} />
+      {/if}
+    {/key}
+  </main>
+</div>

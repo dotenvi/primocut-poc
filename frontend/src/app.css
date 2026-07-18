@@ -1,474 +1,70 @@
 /* ------------------------------------------------------------------ *\
-   PRIMOCUT — "tally-light" visual system.
-   Three status colors read consistently across the whole app:
-     tally  (terracotta) = primary action / failed / live attention
-     cue    (amber)      = processing / in-progress
-     ready  (green)      = done / confirmed
-   No glow, no colored shadow, no HUD chrome — a serious work tool.
+   PRIMOCUT — Tailwind build. The design system (tokens in tailwind.config.js,
+   component classes below) is ported verbatim from the approved navigation
+   prototype v3, which is the normative reference for layout, colour and copy.
+   Play CDN is gone: this compiles through PostCSS + Tailwind at build time.
 \* ------------------------------------------------------------------ */
-:root {
-  --bg: #101113;        /* warm near-black page */
-  --panel: #17181B;     /* one step up: cards / bars */
-  --inset: #0e0f11;     /* recessed fields, sparkline wells */
-  --border: #2a2c30;    /* hairline */
-  --fg: #edeae2;        /* warm paper white */
-  --muted: #8e9096;     /* dimmed secondary text */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-  --tally: #e14b3c;     --tally-dim: #280e0b;   /* action / failed */
-  --cue: #e8a33d;       --cue-dim: #33270f;     /* processing */
-  --ready: #4fae7a;     --ready-dim: #12291e;   /* done */
-  --neutral-dim: #202226;                       /* pending / idle badge well */
-
-  --r-input: 8px;       /* inputs, buttons */
-  --r-card: 12px;       /* cards, panels, wells */
-
-  --f-label: 'Barlow Condensed', 'Oswald', system-ui, sans-serif;
-  --f-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-  --f-body: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-}
-* { box-sizing: border-box; }
-html { font-size: 17px; }
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font: 1rem/1.65 var(--f-body);
-  -webkit-font-smoothing: antialiased;
-}
-a { color: var(--fg); text-decoration: none; }
-a:hover { color: var(--tally); text-decoration: underline; text-underline-offset: 3px; }
-.muted { color: var(--muted); font-size: 0.9em; }
-.error { color: var(--tally); }
-
-/* Visible keyboard focus everywhere, no glow. */
-:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; border-radius: 3px; }
-
-#app { display: flex; min-height: 100vh; }
-.sidebar {
-  flex: 0 0 220px; align-self: flex-start;
-  position: sticky; top: 0; height: 100vh;
-  display: flex; flex-direction: column; gap: 28px;
-  padding: 22px 18px;
-  border-right: 1px solid var(--border); background: var(--panel);
-}
-.brand {
-  display: flex; align-items: center; gap: 10px;
-  font-family: var(--f-label); font-weight: 700; font-size: 1.25rem;
-  letter-spacing: 0.14em; color: var(--fg);
-}
-.brand-logo { width: auto; height: 40px; flex: none; object-fit: contain; }
-.brand:hover { color: var(--fg); text-decoration: none; }
-.sidebar nav { display: flex; flex-direction: column; gap: 4px; }
-.sidebar nav a {
-  display: flex; align-items: center; gap: 11px;
-  color: var(--muted); padding: 9px 12px; border-radius: var(--r-input);
-  font-family: var(--f-label); font-weight: 500; font-size: 1.15rem; letter-spacing: 0.04em;
-}
-.sidebar nav a svg { width: 20px; height: 20px; flex: none; }
-.sidebar nav a:hover { color: var(--fg); background: var(--inset); text-decoration: none; }
-.sidebar nav a.active { color: var(--fg); background: var(--neutral-dim); }
-
-main { flex: 1 1 auto; min-width: 0; max-width: 900px; margin: 0 auto; padding: 28px 20px 88px; }
-section { margin: 28px 0; }
-
-/* Competitors — dense tables and dashboards: give them the full width and let
-   them sit against the sidebar instead of floating in the middle. */
-main.projects { max-width: 1720px; margin-left: 0; }
-
-/* Report — "watch" layout: sticky player on the left, tabs on the right.
-   Widens only on the report route; collapses to one column while the
-   pipeline is still running (no tabs yet) and on narrow screens. */
-main.report { max-width: 1720px; }
-.report-layout:not(.split) { max-width: 960px; margin: 0 auto; }
-.report-layout.split {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-  gap: 32px;
-  align-items: start;
-}
-.report-main { min-width: 0; }
-.report-side { min-width: 0; }
-.report-side .tabs-card { margin: 0; }
-
-/* Two-column view: turn the report route into a fixed-height app shell so the
-   panes never scroll off-screen — the page itself doesn't scroll, only the
-   Topics/Transcript list scrolls *inside* its card. Both panes stay put like
-   the player. Scoped to the finished `.split` view (the processing view keeps
-   normal page scroll) and to wide screens (mobile collapses to one column). */
-@media (min-width: 901px) {
-  body:has(.report-layout.split) { overflow: hidden; }
-  /* The app mounts into #app, a flex row (sidebar + main). Pin it to the
-     viewport so the sidebar and the viewport-filling main never scroll off. */
-  body:has(.report-layout.split) #app { height: 100vh; overflow: hidden; }
-  body:has(.report-layout.split) main.report {
-    flex: 1 1 auto; min-height: 0; overflow: hidden;
-    /* width:100% stops the flex item from shrinking to its content width
-       (margin:0 auto would otherwise make it max-content, so filtering the
-       transcript would shrink & re-center the whole page). */
-    width: 100%;
-    padding-top: 20px; padding-bottom: 20px;
-  }
-  /* min-height:0 on every flex/grid ancestor so they shrink to the viewport
-     instead of growing to content — otherwise the inner scroll never engages. */
-  .report-layout.split { height: 100%; min-height: 0; grid-template-rows: minmax(0, 1fr); }
-  .report-layout.split .report-side { height: 100%; min-height: 0; }
-  /* The tab bar is a fixed header; overflow:hidden clips the scrolling list
-     (and the bar) to the card's rounded corners. */
-  .report-layout.split .tabs-card {
-    height: 100%; min-height: 0; padding: 0 24px; overflow: hidden;
-    display: flex; flex-direction: column;
-  }
-  .report-layout.split .tab-bar { flex: 0 0 auto; margin-bottom: 0; }
-  .report-layout.split .tab-panel {
-    flex: 1 1 auto; min-height: 0; overflow: hidden auto;
-    /* reserve the scrollbar's space so filtering the list (bar appears/
-       disappears) doesn't reflow the content width. */
-    scrollbar-gutter: stable;
-    /* pull the scrollbar out to the card's right edge, keep content clear of it */
-    margin-right: -16px;
-    padding: 20px 20px 8px 0;
-  }
-  /* Chrome/Edge/Safari: style the legacy webkit scrollbar (thin, terracotta,
-     no arrow buttons). We deliberately do NOT set scrollbar-width/-color here:
-     when those standard props are present, Chrome ignores ::-webkit-scrollbar
-     and renders a fallback scrollbar that shows the OS arrow buttons. */
-  .report-layout.split .tab-panel::-webkit-scrollbar { width: 8px; }
-  .report-layout.split .tab-panel::-webkit-scrollbar-button { display: none; }
-  /* margin keeps the bar off the very top/bottom of the pane */
-  .report-layout.split .tab-panel::-webkit-scrollbar-track { background: transparent; margin: 8px 0; }
-  .report-layout.split .tab-panel::-webkit-scrollbar-thumb {
-    background: var(--tally); border-radius: 999px;
-    border: 2px solid transparent; background-clip: content-box;
-  }
-  /* Firefox has no ::-webkit-scrollbar; give it the standard props instead. */
-  @supports not selector(::-webkit-scrollbar) {
-    .report-layout.split .tab-panel {
-      scrollbar-width: thin; scrollbar-color: var(--tally) transparent;
-    }
-  }
-  /* transcript uses the pane's own scroll; keep its search pinned. */
-  .report-layout.split .transcript { max-height: none; }
-  .report-layout.split .tab-panel .search { position: sticky; top: 0; z-index: 1; }
-}
-@media (max-width: 900px) {
-  main.report { max-width: 900px; }
-  .report-layout.split { display: block; }
-  .report-side .tabs-card { margin: 24px 0; }
-  /* Sidebar collapses back to a horizontal top bar on narrow screens. */
-  #app { display: block; }
-  .sidebar {
-    position: static; height: auto; flex: none; align-self: auto;
-    flex-direction: row; align-items: center; gap: 24px;
-    padding: 14px 22px;
-    border-right: none; border-bottom: 1px solid var(--border);
-  }
-  .sidebar nav { flex-direction: row; gap: 16px; }
-}
-h1, h2, h3 { font-family: var(--f-label); font-weight: 600; letter-spacing: 0.01em; }
-h1 { font-size: 1.8rem; margin: 0 0 4px; }
-h2 { font-size: 1.25rem; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-
-.card {
-  background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--r-card); padding: 24px;
-}
-.row-input { display: flex; gap: 8px; margin-top: 14px; }
-input {
-  flex: 1; padding: 11px 13px; border-radius: var(--r-input);
-  border: 1px solid var(--border); background: var(--inset);
-  color: var(--fg); font: inherit;
-}
-input::placeholder { color: var(--muted); }
-input:focus { outline: none; border-color: var(--cue); }
-
-/* Buttons ----------------------------------------------------------- */
-button, .btn {
-  padding: 10px 15px; border-radius: var(--r-input); border: 1px solid transparent;
-  background: var(--tally); color: #101113; cursor: pointer;
-  font: inherit; font-weight: 600; letter-spacing: 0.01em;
-}
-button:hover, .btn:hover { text-decoration: none; }
-button:disabled { opacity: 0.5; cursor: default; }
-
-.btn.ghost { background: transparent; color: var(--fg); border-color: var(--border); }
-.btn.ghost:hover { border-color: var(--fg); }
-
-.btn.danger, .mini.danger { border-color: var(--tally); color: var(--tally); background: transparent; }
-.btn.danger:hover, .mini.danger:hover { background: var(--tally-dim); color: var(--tally); }
-
-.mini {
-  padding: 5px 11px; font-size: 0.82em; font-weight: 500;
-  background: transparent; color: var(--muted); border: 1px solid var(--muted);
-}
-.mini:hover { color: var(--fg); border-color: var(--fg); }
-.mini:disabled { opacity: 0.55; cursor: default; }
-.mini.ai { border-color: var(--tally); color: var(--tally); }
-.mini.ai:hover:not(:disabled) { background: var(--tally-dim); color: var(--tally); }
-.mini.link { color: var(--muted); border: 0; text-decoration: none; display: inline-flex; align-items: center; }
-.mini.link:hover { color: var(--fg); background: transparent; }
-
-.list { list-style: none; padding: 0; }
-.row { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); }
-.grow { flex: 1; min-width: 0; }
-
-/* Video list rows + inline "processing" progress line --------------- */
-.vrow { padding: 14px 0; border-bottom: 1px solid var(--border); }
-.vrow-main { display: flex; align-items: center; gap: 14px; }
-.progress-line { margin-top: 12px; }
-.progress-head { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
-.progress-label { color: var(--fg); font-size: 0.92em; font-weight: 500; }
-.progress-count {
-  margin-left: auto; color: var(--muted);
-  font-family: var(--f-mono); font-size: 0.82em; font-variant-numeric: tabular-nums;
-}
-.progress-bar { width: 100%; height: 4px; background: var(--inset); border-radius: 4px; overflow: hidden; }
-.progress-fill { height: 100%; background: var(--cue); transition: width 0.4s; }
-.spinner {
-  width: 15px; height: 15px; flex: 0 0 auto; border-radius: 50%;
-  border: 2px solid var(--cue-dim); border-top-color: var(--cue);
-  animation: spin 0.8s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* Status pills — a tally lamp (currentColor) precedes the label. */
-.status {
-  display: inline-flex; align-items: center; gap: 7px;
-  font-family: var(--f-label); font-size: 0.82em; font-weight: 600;
-  letter-spacing: 0.08em; text-transform: uppercase;
-  padding: 3px 11px; border-radius: 999px;
-  background: var(--neutral-dim); color: var(--muted);
-}
-.status::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.status-done { color: var(--ready); background: var(--ready-dim); }
-.status-error { color: var(--tally); background: var(--tally-dim); }
-.status-stopped { color: var(--muted); background: var(--neutral-dim); }
-.status-queued, .status-downloading, .status-transcribing, .status-analyzing {
-  color: var(--cue); background: var(--cue-dim);
+@layer base {
+  body { @apply bg-bg text-ink font-sans text-[13.5px] leading-relaxed antialiased; }
+  h1 { @apply text-[26px] font-semibold tracking-[-0.02em] leading-tight; }
+  h2 { @apply text-[18px] font-semibold tracking-[-0.01em]; }
+  input[type='text'] { @apply font-mono text-[12.5px] bg-sunk border border-line-strong rounded-md px-3 py-2 text-ink w-full placeholder:text-ink-3 focus:outline-none focus:border-accent; }
+  :focus-visible { @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-bg; }
 }
 
-/* Pipeline — a tally rail of lamps joined by hairline connectors. */
-.pipeline { margin: 20px 0; }
-.pipeline h3 { margin: 0 0 12px; font-size: 1.05rem; }
-.pbar { height: 8px; background: var(--inset); border-radius: 999px; overflow: hidden; margin-bottom: 16px; }
-.pbar .pfill { height: 100%; background: var(--cue); transition: width 0.4s ease; }
-.dots { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
-.dot { width: 15px; height: 15px; border-radius: 50%; background: var(--neutral-dim); }
-.dot-link { width: 24px; height: 2px; border-radius: 2px; background: var(--border); }
-.dot.st-done { background: var(--ready); }
-.dot.st-running { background: var(--cue); animation: pulse 1.2s infinite; }
-.dot.st-failed { background: var(--tally); }
-.dot.st-pending { background: var(--neutral-dim); }
-.dot.st-empty { background: var(--muted); }
-.dot.st-skipped { background: transparent; border: 2px dashed var(--muted); }
-
-.pipe-toggle {
-  display: inline-flex; align-items: center; gap: 6px;
-  margin-top: 12px; padding: 0;
-  background: none; border: none; cursor: pointer;
-  font-size: 0.85rem; font-weight: 500; letter-spacing: 0.01em;
-  color: var(--muted); transition: color 0.15s ease;
+@layer components {
+  .eyebrow { @apply font-mono text-[10px] tracking-[0.14em] uppercase text-ink-3; }
+  .lbl     { @apply font-mono text-[10px] tracking-[0.14em] uppercase text-ink-3; }
+  .m       { @apply font-mono text-[11.5px] text-ink-2 tabular-nums; }
+  .btn     { @apply font-sans text-[12.5px] text-ink-2 bg-transparent border border-line-strong rounded-md px-3 py-1.5 cursor-pointer hover:bg-card2 hover:text-ink hover:border-[#3F4954] active:translate-y-px; }
+  .btn-pri { @apply bg-accent border-accent text-accent-on font-medium hover:bg-accent-hi hover:border-accent-hi hover:text-accent-on; }
+  .btn-ai  { @apply border-accent-line text-accent hover:bg-accent-bg hover:text-accent-hi hover:border-accent-line; }
+  .btn-xs  { @apply px-2 py-0.5 text-[11px]; }
+  .card    { @apply bg-card border border-line rounded-card px-4 py-3.5; }
+  .chip    { @apply font-mono text-[11px] px-2.5 py-1 rounded-md border border-line text-ink-3 cursor-pointer hover:border-line-strong hover:text-ink-2; }
+  .chip.on { @apply bg-card2 border-line-strong text-ink; }
+  .tab     { @apply text-[14.5px] font-medium px-3.5 py-2 text-ink-3 cursor-pointer border-b-2 border-transparent -mb-px hover:text-ink-2; }
+  .tab.on  { @apply text-ink border-b-accent; }
+  .nav     { @apply flex items-center gap-2.5 px-2 py-1.5 rounded-md cursor-pointer text-ink-2 text-[13px] hover:bg-card; }
+  .nav.on  { @apply bg-card2 text-ink shadow-[inset_2px_0_0_theme(colors.accent.DEFAULT)]; }
+  .tag     { @apply font-mono text-[10px] px-1.5 py-px rounded border whitespace-nowrap tracking-wide; }
+  .ev      { @apply flex gap-3 items-center bg-card border border-line rounded-card px-3 py-2.5 mb-1.5 cursor-pointer hover:bg-card2 hover:border-line-strong; }
+  .ev.seen { @apply bg-transparent border-0 border-t border-line rounded-none px-0.5 py-2 mb-0 gap-2.5; }
+  .kv      { @apply flex justify-between items-center py-1.5 border-t border-line text-[13px] first:border-t-0; }
+  .pat     { @apply flex items-center gap-2.5 py-1.5 border-t border-line text-[12.5px] first:border-t-0; }
+  .topic   { @apply px-3 py-2 border border-transparent rounded-md cursor-pointer hover:bg-card; }
+  .topic.on{ @apply bg-card2 border-line-strong; }
+  .st      { @apply w-2 h-2 rounded-full bg-[#2B323A] shrink-0; }
+  .st-l    { @apply w-3.5 h-px bg-line-strong; }
+  td       { @apply py-2 pr-2.5 border-t border-line align-middle; }
+  th       { @apply text-left font-mono text-[10px] tracking-[0.12em] uppercase text-ink-3 font-normal pb-2 pr-2.5; }
 }
-.pipe-toggle:hover { color: var(--fg); }
-.pipe-toggle .chev { transition: transform 0.2s ease; }
-.pipe-toggle.open .chev { transform: rotate(180deg); }
-.pipe-details { margin-top: 16px; }
-.pipe-details ul { list-style: none; padding: 0; margin: 0; }
-.pipe-details li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); }
-.pipe-details .li-right { display: flex; align-items: center; gap: 10px; }
-.stage-dur { color: var(--muted); font-family: var(--f-mono); font-size: 0.8em; font-variant-numeric: tabular-nums; }
 
-/* Step badges — pill wells, label type, color reads as the state. */
-.badge {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 104px; box-sizing: border-box;
-  font-family: var(--f-label); font-size: 0.74em; font-weight: 600;
-  letter-spacing: 0.07em; text-transform: uppercase;
-  padding: 3px 10px; border-radius: 999px;
-  background: var(--neutral-dim); color: var(--muted);
-}
-.badge.st-done { background: var(--ready-dim); color: var(--ready); }
-.badge.st-running { background: var(--cue-dim); color: var(--cue); }
-.badge.st-failed { background: var(--tally-dim); color: var(--tally); }
-.badge.st-pending { background: var(--neutral-dim); color: var(--muted); }
-.badge.st-empty { background: var(--neutral-dim); color: var(--muted); }
-.badge.st-skipped { background: transparent; border: 1px dashed var(--muted); color: var(--muted); }
-.pulse-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--cue); margin-right: 6px; animation: pulse 1.2s infinite; }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-
-.head-actions { display: flex; align-items: center; gap: 8px; }
-.head-left { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; min-width: 0; }
-.processing { color: var(--cue); }
-.degraded, .player-blocked {
-  background: var(--cue-dim); border: 1px solid var(--cue);
-  border-radius: var(--r-input); padding: 12px 16px; color: var(--fg);
-}
-.degraded h3 { margin: 0 0 6px; color: var(--cue); }
-
-/* Chat-activity histogram — neutral bars, tally peak links. */
-.spark { display: flex; align-items: flex-end; gap: 2px; height: 80px; padding: 8px; background: var(--inset); border-radius: var(--r-card); }
-.spark-bar { flex: 1; min-width: 2px; background: #3f4145; border-radius: 2px 2px 0 0; }
-.peaks { margin-top: 10px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--muted); }
-.peak-link {
-  background: transparent; border: 0; padding: 0; cursor: pointer;
-  color: var(--tally); font-family: var(--f-mono); font-size: 0.9em; font-weight: 500;
-  font-variant-numeric: tabular-nums; letter-spacing: 0;
-}
-.peak-link:hover { text-decoration: underline; text-underline-offset: 3px; }
-
-.search { width: 100%; margin-bottom: 12px; }
-.transcript {
-  max-height: 420px; overflow: auto; background: var(--inset);
-  border: 1px solid var(--border); border-radius: var(--r-card); padding: 14px;
-}
-.transcript p { margin: 4px 0; }
-.ts {
-  font-family: var(--f-mono); font-size: 0.88em; font-variant-numeric: tabular-nums;
-  color: var(--muted); margin-right: 8px;
-  background: transparent; border: 0; padding: 0; cursor: pointer;
-}
-.ts:hover { color: var(--tally); text-decoration: underline; text-underline-offset: 3px; }
-
-/* Embedded YouTube player (scrolls with the report). */
+/* Embedded YouTube player (the IFrame API replaces the inner div with an iframe). */
 .player-frame {
   width: 100%; aspect-ratio: 16 / 9;
-  background: #000; border-radius: var(--r-card); overflow: hidden;
+  background: #000; border: 1px solid theme(colors.line.DEFAULT);
+  border-radius: theme(borderRadius.card); overflow: hidden;
 }
 .player-frame iframe, .player-frame > div { width: 100%; height: 100%; border: 0; display: block; }
 .player-frame.hidden { display: none; }
-.player-blocked { margin-bottom: 8px; }
-
-/* Report tabs (Chat activity / Topics / Transcript). */
-.tabs-card { margin: 24px 0; padding-top: 0; }
-.tab-bar {
-  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
-  margin: 0 -24px 20px; padding: 0 16px;
-  border-bottom: 1px solid var(--border);
-}
-.tab-bar-action { margin-left: auto; }
-.tab {
-  background: transparent; border: 0; border-bottom: 2px solid transparent;
-  color: var(--muted); cursor: pointer;
-  font-family: var(--f-label); font-weight: 500; font-size: 1em; letter-spacing: 0.03em;
-  padding: 14px 12px; margin-bottom: -1px; border-radius: 0;
-}
-.tab:hover { color: var(--fg); }
-.tab.active { color: var(--fg); border-bottom-color: var(--tally); }
-.tab-panel { min-height: 80px; }
-
-/* Topics card (collapsible rows). */
-.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
-.card-head h3 { margin: 0; font-size: 1.05rem; }
-.topic { border-bottom: 1px solid var(--border); padding: 10px 0; }
-.topic:last-child { border-bottom: 0; }
-.topic-head { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
-.disclosure {
-  flex: 1 1 auto; min-width: 0; text-align: left;
-  background: transparent; border: 0; color: var(--fg); cursor: pointer; font: inherit; font-weight: 400;
-  padding: 2px 4px; display: inline-flex; align-items: center; gap: 6px;
-}
-.disclosure b { overflow-wrap: anywhere; font-weight: 600; }
-.disclosure:hover { text-decoration: underline; text-underline-offset: 3px; }
-.caret { color: var(--muted); width: 1em; flex: 0 0 auto; display: inline-block; }
-.topic-head .fire, .topic-head .watch { flex: 0 0 auto; }
-.topic-meta { margin: 3px 0 0 26px; font-family: var(--f-mono); font-size: 0.82em; font-variant-numeric: tabular-nums; }
-.topic-body { margin: 6px 0 2px 26px; }
-
-/* ------------------------------------------------------------------ *\
-   Competitors (Phase 2) — project selector, dashboards, video detail.
-   Same three status colors: cue = provisional/collecting, ready = win,
-   tally = loss. No new palette.
-\* ------------------------------------------------------------------ */
-
-/* Numbers read as data: mono + tabular figures, like the timestamps. */
-.mono { font-family: var(--f-mono); font-size: 0.9em; font-variant-numeric: tabular-nums; }
-
-/* Project selector + manage panel. */
-.switcher { margin: 14px 0 18px; }
-.switcher-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.proj-select {
-  padding: 9px 12px; border-radius: var(--r-input);
-  border: 1px solid var(--border); background: var(--inset); color: var(--fg);
-  font: inherit; font-family: var(--f-label); font-size: 1.1rem; letter-spacing: 0.03em;
-  min-width: 220px; cursor: pointer;
-}
-.proj-select:focus { outline: none; border-color: var(--cue); }
-.mini.active { color: var(--fg); border-color: var(--fg); }
-.manage-panel { margin-top: 12px; }
-.manage-panel h3 { margin: 18px 0 6px; font-size: 1rem; }
-.manage-panel h3:first-of-type { margin-top: 0; }
-
-/* Tab bar outside a card: undo the card-bleed margins. */
-.tab-bar.flush { margin: 0 0 20px; padding: 0; }
-
-/* Metric tables (outlier rankings, pattern distributions). */
-.otable-wrap { overflow-x: auto; }
-.otable { width: 100%; border-collapse: collapse; }
-.otable th, .otable td {
-  padding: 9px 10px; text-align: left; vertical-align: middle;
-  border-bottom: 1px solid var(--border);
-}
-.otable th {
-  font-family: var(--f-label); font-weight: 600; font-size: 0.8rem;
-  letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted);
-}
-.otable th.num, .otable td.num { text-align: right; }
-.otable tbody tr:hover { background: var(--inset); }
-
-/* Inline format tag (e.g. "short") — quieter than a status pill. */
-.tag {
-  display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px;
-  background: var(--neutral-dim); color: var(--muted);
-  font-family: var(--f-label); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase;
+.player-blocked {
+  background: theme(colors.err.bg); border: 1px solid theme(colors.err.line);
+  border-radius: theme(borderRadius.card); padding: 10px 14px; margin-bottom: 8px;
+  color: theme(colors.ink.2); font-size: 12.5px;
 }
 
-/* A score computed before the video matured — same amber as "processing". */
-.status-provisional { color: var(--cue); background: var(--cue-dim); }
-
-/* "Still collecting" notice — never show an empty dashboard instead. */
-.collecting {
-  background: var(--cue-dim); border: 1px solid var(--cue);
-  border-radius: var(--r-input); padding: 10px 14px; margin: 12px 0; color: var(--fg);
-}
-
-/* Stat tiles (baselines, engagement, velocity). */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
-.tile h3 { margin: 0 0 4px; font-size: 1.05rem; }
-.tile-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 7px 0; border-bottom: 1px solid var(--border);
-}
-.tile-row:last-child { border-bottom: 0; }
-
-/* Audience requests — one column per request type the audience actually used. */
-.req-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
-.req-cols h3 { margin: 0 0 4px; font-size: 1.05rem; }
-
-/* Snapshot time series — hand-built SVG, no chart library. */
-.sparkline { width: 100%; display: block; background: var(--inset); border-radius: var(--r-card); }
-.sparkline-area { fill: var(--tally-dim); stroke: none; }
-.sparkline-line { fill: none; stroke: var(--tally); stroke-width: 2; }
-
-/* Cadence histograms — reuse the chat-activity bar well, add labels below. */
-.spark.bars { height: auto; align-items: flex-end; gap: 4px; }
-.bar-col { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.bar-well { width: 100%; height: 80px; display: flex; align-items: flex-end; }
-.bar-col .spark-bar { flex: none; width: 100%; }
-.bar-label { font-family: var(--f-mono); font-size: 0.62rem; color: var(--muted); }
-
-/* Channel / video headers. */
-.ch-head { margin: 8px 0 16px; }
-.ch-head h2, .vd-head h2 { border-bottom: 0; padding-bottom: 0; margin: 0 0 2px; }
-.vd-head { display: flex; align-items: flex-start; gap: 16px; margin: 8px 0 20px; }
-.vd-thumb { width: 180px; flex: none; border-radius: var(--r-card); }
-@media (max-width: 600px) {
-  .vd-head { flex-direction: column; }
-  .vd-thumb { width: 100%; }
-}
-
-/* Syntactic title attributes — a row of chips. */
-.attr-list { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 8px; }
-.attr {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 4px 12px; border-radius: 999px;
-  background: var(--inset); border: 1px solid var(--border); font-size: 0.85rem;
+/* Respect a reader's reduced-motion preference across every animation/transition
+   (spinners, the pulsing running lamp, hover transitions). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
