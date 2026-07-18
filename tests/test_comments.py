@@ -119,6 +119,10 @@ def _db(tmp_path) -> Database:
 
 
 def _settings(tmp_path, **kw) -> Settings:
+    # The uniform peer fixtures here (12 peers at 1000 + a target) are calibrated to
+    # the fixed-multiple bands: "2x is not an outlier, 3x is". Percentiles of an
+    # (almost) constant peer set would sit at the floor and band everything.
+    kw.setdefault("band_basis", "fixed_multiple")
     return Settings(db_path=tmp_path / "t.db", youtube_api_key="K", **kw)
 
 

@@ -20,7 +20,10 @@ from primocut.metrics.enrichment import SOURCE_THUMBNAIL, derive_thumbnail_facet
 from primocut.metrics.patterns import conditional_patterns
 
 NOW = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)
-SETTINGS = Settings(youtube_api_key="K")
+# The uniform fixtures (outliers at 5000 over a 1000 baseline) are calibrated to
+# the fixed-multiple bands; the percentile default is covered elsewhere.
+SETTINGS = Settings(youtube_api_key="K", band_basis="fixed_multiple")
+Z = 1.96
 
 
 def _db(tmp_path) -> Database:
@@ -79,25 +82,24 @@ def _pattern(dash, attribute, fmt="long"):
 
 
 def test_patterns_carry_their_source():
-    population = [{"thumb_expression_shock": i < 40} for i in range(100)]
+    # Shock in every outlier vs 40% of the control — separates, tagged by source.
     outliers = [{"thumb_expression_shock": True} for _ in range(20)]
+    control = [{"thumb_expression_shock": i < 16} for i in range(40)]
 
-    reported = conditional_patterns(
-        population, outliers, min_occurrence=15, source=SOURCE_THUMBNAIL
-    )
+    reported = conditional_patterns(outliers, control, z=Z, source=SOURCE_THUMBNAIL)
 
     assert [p.source for p in reported] == [SOURCE_THUMBNAIL]
-    assert reported[0].lift == 2.5
+    assert reported[0].verdict == "positive" and reported[0].lift == 2.5
 
 
-# ------------------------- integration: per-source population -------------------------
+# ------------------------- integration: per-source groups -------------------------
 
 
-def test_ai_attributes_reach_the_distributions_with_an_honest_population(tmp_path):
+def test_ai_attributes_reach_the_distributions_with_an_honest_control(tmp_path):
     db = _db(tmp_path)
     pid = _seed_project(db)
-    # Every OUTLIER is enriched and shows a shocked face; the 40 baseline videos
-    # are enriched too, but only 10 of them show one.
+    # Every OUTLIER is enriched and shows a shocked face; the 40 baseline (control)
+    # videos are enriched too, but only 10 of them show one.
     for i in range(20):
         _enrich(db, f"out{i}", "shock")
     for i in range(40):
@@ -108,16 +110,20 @@ def test_ai_attributes_reach_the_distributions_with_an_honest_population(tmp_pat
 
     p = _pattern(dash, "thumb_expression_shock")
     assert p is not None and p["source"] == SOURCE_THUMBNAIL
-    assert p["outlier_occurrences"] == 20
-    assert p["outlier_rate"] == 1.0          # 20/20 outliers
-    assert p["population_rate"] == 0.5       # 30/60 videos
-    assert p["lift"] == 2.0
+    assert p["verdict"] == "positive"
+    assert p["n_outlier"] == 20 and p["n_control"] == 40
+    assert p["freq_outlier"] == 1.0          # 20/20 outliers
+    assert p["freq_control"] == 0.25         # 10/40 control
+    assert p["lift"] == 4.0
 
 
-def test_unenriched_videos_are_unknown_not_absent(tmp_path):
-    """Only the 20 outliers are enriched. The population for `thumbnail_llm` is
-    therefore those same 20 videos — NOT all 60 scored ones. Counting the 40
-    un-enriched videos as "no shocked face" would report a fabricated 3x lift."""
+def test_unenriched_control_yields_no_ai_pattern(tmp_path):
+    """Only the 20 outliers are enriched; the control videos are not. An un-enriched
+    video is *unknown* for `thumbnail_llm`, not "no shocked face" — so the control
+    group for that source is empty and no honest comparison exists. The attribute is
+    withheld rather than compared against a fabricated (self-referential) baseline.
+    (This is why enriching only the outliers now surfaces no AI pattern: the control
+    must be enriched too.)"""
     db = _db(tmp_path)
     pid = _seed_project(db)
     for i in range(20):
@@ -126,19 +132,19 @@ def test_unenriched_videos_are_unknown_not_absent(tmp_path):
     with db.session() as s:
         dash = service.project_dashboard(s, pid, settings=SETTINGS, now=NOW)
 
-    p = _pattern(dash, "thumb_expression_shock")
-    assert p is not None
-    assert p["population_rate"] == 1.0  # 20/20 enriched — not 20/60
-    assert p["lift"] == 1.0             # no evidence either way, honestly reported
+    assert _pattern(dash, "thumb_expression_shock") is None
 
 
-def test_sparse_enrichment_is_suppressed_by_the_minimum_occurrence_guard(tmp_path):
-    """Enrichment is opt-in and sparse: until enough outliers are enriched, the
-    guard must report nothing rather than a small-sample claim."""
+def test_sparse_enrichment_is_self_regulated_by_the_wilson_guard(tmp_path):
+    """Enrichment is opt-in and sparse. With only a handful of enriched videos on
+    each side, the Wilson intervals are wide and overlap, so nothing is reported —
+    no arbitrary minimum-occurrence floor is needed."""
     db = _db(tmp_path)
     pid = _seed_project(db)
-    for i in range(8):  # below pattern_min_occurrence (15)
+    for i in range(8):
         _enrich(db, f"out{i}", "shock")
+    for i in range(8):  # a small, mixed control
+        _enrich(db, f"base{i}", "shock" if i < 4 else "neutral")
 
     with db.session() as s:
         dash = service.project_dashboard(s, pid, settings=SETTINGS, now=NOW)
@@ -159,8 +165,12 @@ def test_syntactic_and_ai_patterns_coexist(tmp_path):
         refresh_syntactic_attributes(
             s, [v.video_id for v in crepo.list_channel_videos(s, "UCp")]
         )
+    # Enrich the outliers (all shock) and the control (few shock) so the AI source
+    # has both groups; the syntactic "?" comes for free on every video.
     for i in range(20):
         _enrich(db, f"out{i}", "shock")
+    for i in range(40):
+        _enrich(db, f"base{i}", "shock" if i < 8 else "neutral")
 
     with db.session() as s:
         dash = service.project_dashboard(s, pid, settings=SETTINGS, now=NOW)

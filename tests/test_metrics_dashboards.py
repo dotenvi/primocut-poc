@@ -5,6 +5,7 @@ project report is scoped to its own channels.
 
 from __future__ import annotations
 
+import random
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
@@ -17,7 +18,13 @@ from primocut.metrics import service
 from primocut.metrics.attributes import refresh_syntactic_attributes
 
 NOW = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)
-SETTINGS = Settings(youtube_api_key="K")
+# The uniform synthetic fixtures below (all peers at one view count + a viral) are
+# calibrated to the legacy fixed-multiple semantics, so structural tests run in
+# that basis; the percentile default is exercised by the distribution tests, which
+# use a skewed sample. A wide window lets every seeded video enter the ruler.
+SETTINGS = Settings(youtube_api_key="K", band_basis="fixed_multiple")
+PCT_SETTINGS = Settings(youtube_api_key="K", outlier_window_videos=500)
+FIXED_BIG = Settings(youtube_api_key="K", band_basis="fixed_multiple", outlier_window_videos=500)
 
 
 def _db(tmp_path) -> Database:
@@ -80,7 +87,7 @@ def test_channel_dashboard_ranks_outliers_and_separates_formats(tmp_path):
     assert data["baselines"]["long"]["median"] == 1000
     assert data["baselines"]["short"]["median"] == 500  # separate baseline
     top = data["outliers"]["long"][0]
-    assert top["video_id"] == "viral" and top["bracket"] == "10x" and top["score"] == 10.0
+    assert top["video_id"] == "viral" and top["band"] == "exceptional" and top["median_multiple"] == 10.0
 
 
 def test_channel_dashboard_segregates_engagement_by_format(tmp_path):
@@ -119,8 +126,8 @@ def test_channel_dashboard_segregates_outliers_by_format(tmp_path):
     assert [o["video_id"] for o in data["outliers"]["long"]] == ["viral_long"]
     assert [o["video_id"] for o in data["outliers"]["short"]] == ["viral_short"]
     # Each is scored against its own format's baseline: 10000/1000 and 5000/500.
-    assert data["outliers"]["long"][0]["score"] == 10.0
-    assert data["outliers"]["short"][0]["score"] == 10.0
+    assert data["outliers"]["long"][0]["median_multiple"] == 10.0
+    assert data["outliers"]["short"][0]["median_multiple"] == 10.0
 
 
 def test_channel_dashboard_404(tmp_path):
@@ -196,10 +203,12 @@ def test_shared_channel_identical_metrics_scoped_reports(tmp_path):
     assert "viralA" in ids_a and "viralA" not in ids_b
     assert "viralB" in ids_b and "viralB" not in ids_a
 
-    # The shared video's score is identical across the two project reports.
+    # The shared video's band is identical across the two project reports — it is a
+    # channel metric, independent of which project scopes the report.
     sa = next(o for o in dash_a["outliers"]["long"] if o["video_id"] == "viral")
     sb = next(o for o in dash_b["outliers"]["long"] if o["video_id"] == "viral")
-    assert sa["score"] == sb["score"] == 10.0
+    assert sa["median_multiple"] == sb["median_multiple"] == 10.0
+    assert sa["band"] == sb["band"] == "exceptional"
 
 
 def test_project_dashboard_segregates_outliers_by_format(tmp_path):
@@ -233,11 +242,10 @@ def test_project_dashboard_404(tmp_path):
 def test_project_dashboard_pattern_guard(tmp_path):
     db = _db(tmp_path)
     _channel(db, "UCp")
-    # 20 outliers (5x) all sharing a "?" title — a minority, so the median stays
-    # at the baseline (median is robust); a well-supported pattern (>= 15).
+    # 20 outliers (5x → banded) all sharing a "?" title — a minority, so the median
+    # stays at the baseline (median is robust). The control is the 40 plain videos.
     for i in range(20):
         _video(db, "UCp", f"out{i}", views=5000, days_ago=20 + i, title=f"Will this work? {i}")
-    # 40 baseline videos hold the median at ~1000, so the outliers score 5x.
     for i in range(40):
         _video(db, "UCp", f"base{i}", views=1000, days_ago=60 + i, title="plain title")
 
@@ -252,5 +260,74 @@ def test_project_dashboard_pattern_guard(tmp_path):
         dash = service.project_dashboard(s, pid, settings=SETTINGS, now=NOW)
 
     q = next((p for p in dash["patterns"]["long"] if p["attribute"] == "has_question"), None)
-    assert q is not None and q["outlier_occurrences"] >= 15
-    assert q["lift"] is not None and q["lift"] > 1.0
+    # The "?" is universal among outliers and absent from control — a positive
+    # pattern whose Wilson intervals clear each other.
+    assert q is not None and q["verdict"] == "positive"
+    assert q["n_outlier"] == 20 and q["n_control"] == 40
+    assert q["freq_outlier"] == 1.0 and q["freq_control"] == 0.0
+    assert q["ci_outlier"][0] > q["ci_control"][1]
+
+
+def test_percentile_bands_flag_roughly_the_tail(tmp_path):
+    # A skewed (log-normal) channel: percentile bands mark ~10% of videos, whereas
+    # the legacy fixed multiple marks far more — the recalibration's whole point.
+    db = _db(tmp_path)
+    _channel(db, "UCln")
+    rng = random.Random(1234)
+    n = 200
+    for i in range(n):
+        views = max(1, int(rng.lognormvariate(6.0, 2.0)))
+        # All mature (>= 7 days) and inside the 180-day window.
+        _video(db, "UCln", f"v{i}", views=views, days_ago=10 + i * 0.7)
+
+    with db.session() as s:
+        pct = service.channel_dashboard(s, "UCln", settings=PCT_SETTINGS, now=NOW)
+        fixed = service.channel_dashboard(s, "UCln", settings=FIXED_BIG, now=NOW)
+
+    pct_frac = len(pct["outliers"]["long"]) / n
+    fixed_frac = len(fixed["outliers"]["long"]) / n
+    assert 0.05 <= pct_frac <= 0.16          # nearest-rank p90 ≈ the top tenth
+    assert fixed_frac >= 0.22                 # 3× the median lands mid-distribution
+    assert pct_frac < fixed_frac
+
+
+def test_insufficient_sample_yields_no_band(tmp_path):
+    db = _db(tmp_path)
+    _channel(db, "UCi")
+    for i in range(9):  # below outlier_min_sample (10)
+        _video(db, "UCi", f"v{i}", views=1000, days_ago=20 + i)
+
+    with db.session() as s:
+        rep = service.video_report(s, "UCi", "v0", settings=PCT_SETTINGS, now=NOW)
+
+    assert rep["outlier"]["status"] == "insufficient_sample"
+    assert rep["outlier"]["band"] is None and rep["outlier"]["median_multiple"] is None
+
+
+def test_provisional_video_is_censored_from_control(tmp_path):
+    # A young (< 7 days) video carrying the outlier attribute must NOT count as a
+    # non-outlier control: it is an unobserved outcome (censored), and including it
+    # would leak an outlier attribute into the control and deflate the lift.
+    db = _db(tmp_path)
+    _channel(db, "UCc")
+    for i in range(15):  # mature outliers (5x), all "?"
+        _video(db, "UCc", f"out{i}", views=5000, days_ago=35 + i, title=f"Really? {i}")
+    for i in range(15):  # mature control, plain titles
+        _video(db, "UCc", f"base{i}", views=1000, days_ago=20 + i, title="plain title")
+    # The trap: a 2-day-old video with a "?" title and a non-outlier view count.
+    _video(db, "UCc", "young", views=1000, days_ago=2, title="Trap question?")
+
+    with db.session() as s:
+        refresh_syntactic_attributes(s, [v.video_id for v in crepo.list_channel_videos(s, "UCc")])
+    with db.session() as s:
+        proj = crepo.create_project(s, "P")
+        crepo.link_channel(s, proj.id, "UCc")
+        pid = proj.id
+
+    with db.session() as s:
+        dash = service.project_dashboard(s, pid, settings=SETTINGS, now=NOW)
+
+    q = next(p for p in dash["patterns"]["long"] if p["attribute"] == "has_question")
+    # Control counts only the 15 mature plain videos — the provisional "?" is out.
+    assert q["n_outlier"] == 15 and q["n_control"] == 15
+    assert q["freq_control"] == 0.0 and q["verdict"] == "positive"
