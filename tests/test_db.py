@@ -6,7 +6,7 @@ from sqlalchemy import select, text
 
 from primocut.db import competitors as crepo
 from primocut.db import repo
-from primocut.db.models import Base, SchemaMigration
+from primocut.db.models import Base, CompetitorVideoRow, SchemaMigration
 from primocut.db.session import Database
 from primocut.models import (
     Segment,
@@ -17,7 +17,7 @@ from primocut.models import (
 )
 
 _LEGACY_VERSIONS = [1, 2, 3, 4, 5, 6]
-_ALL_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8]
+_ALL_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 
 def _db(tmp_path) -> Database:
@@ -107,6 +107,34 @@ def test_migration_upgrades_legacy_db_preserving_topics(tmp_path):
         cols = [r[1] for r in s.execute(text("PRAGMA table_info(topics)")).all()]
         assert "status" not in cols
         assert [t.title for t in repo.get_topics(s, "v1")] == ["kept topic"]
+
+
+def test_009_backfills_empty_competitor_thumbnail_url(tmp_path):
+    """A pre-009 DB with competitor videos missing their thumbnail url gets the
+    canonical hqdefault url derived from the video id; a real stored url is left
+    untouched."""
+    db = Database(f"sqlite:///{tmp_path / 't.db'}")
+    Base.metadata.create_all(db.engine)
+    with db.session() as s:
+        for v in [1, 2, 3, 4, 5, 6, 7, 8]:
+            s.add(SchemaMigration(version=v))
+        crepo.upsert_channel(s, channel_id="c1")
+        crepo.upsert_video(s, video_id="vEmpty", channel_id="c1")  # thumbnail_url ""
+        crepo.upsert_video(
+            s, video_id="vReal", channel_id="c1",
+            thumbnail_url="https://i.ytimg.com/vi/vReal/maxresdefault.jpg",
+        )
+
+    db.init()  # applies migration 009 + backfill
+
+    with db.session() as s:
+        assert list(s.execute(select(SchemaMigration.version)).scalars()) == _ALL_VERSIONS
+        rows = {
+            r.video_id: r.thumbnail_url
+            for r in s.execute(select(CompetitorVideoRow)).scalars()
+        }
+        assert rows["vEmpty"] == "https://i.ytimg.com/vi/vEmpty/hqdefault.jpg"
+        assert rows["vReal"] == "https://i.ytimg.com/vi/vReal/maxresdefault.jpg"
 
 
 def test_init_is_idempotent(tmp_path):

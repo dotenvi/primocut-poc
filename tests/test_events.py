@@ -55,6 +55,7 @@ def _seed_channel_with_peers(db, cid="UCc", *, project_name="Niche", n_peers=12,
         crepo.upsert_video(
             s, video_id="v1", channel_id=cid, title="Target",
             published_at=NOW - timedelta(days=30), duration_s=600,
+            thumbnail_url="https://i.ytimg.com/vi/v1/maxresdefault.jpg",
         )
         return p.id
 
@@ -166,6 +167,8 @@ def test_a_channel_in_two_projects_is_one_row_with_two_badges(tmp_path):
     # (the payload never stored a title). The channel key is present too.
     assert body[0]["title"] == "Target"
     assert "channel_title" in body[0]
+    # The card carries the video's thumbnail, resolved on read (Radar renders it).
+    assert body[0]["thumbnail_url"] == "https://i.ytimg.com/vi/v1/maxresdefault.jpg"
 
 
 def test_the_feed_can_be_scoped_to_a_single_project(tmp_path):

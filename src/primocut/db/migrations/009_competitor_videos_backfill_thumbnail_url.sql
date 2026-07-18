@@ -1,0 +1,18 @@
+-- Backfill competitor_videos.thumbnail_url where it is empty.
+--
+-- The Radar feed now renders each card's thumbnail, sourced from this column.
+-- Rows collected before packaging capture (or any row whose snapshot never
+-- carried a thumbnail) hold the "" default, which would leave the card with no
+-- image. Every YouTube video exposes a deterministic hqdefault thumbnail keyed by
+-- its id, so a row with no stored url is backfilled to that canonical location --
+-- no API call, no quota. hqdefault (480x360) is chosen because it is the largest
+-- size guaranteed to exist for every video, unlike maxres or standard.
+--
+-- Only empty rows are touched, so a real url captured from the API snippet (which
+-- may be maxres or a channel-custom variant) is preserved as-is. New rows keep
+-- getting their real url from the snapshot writer, so this is a one-time repair of
+-- the existing backlog, not an ongoing policy.
+--
+-- NOTE the migration splitter naively breaks the file on the semicolon character,
+-- so comments here must not contain one.
+UPDATE competitor_videos SET thumbnail_url = 'https://i.ytimg.com/vi/' || video_id || '/hqdefault.jpg' WHERE thumbnail_url = ''

@@ -117,6 +117,14 @@ def video_titles(s: Session, video_ids: list[str]) -> dict[str, str]:
     return _titles(s, CompetitorVideoRow.video_id, CompetitorVideoRow.title, video_ids)
 
 
+def video_thumbnails(s: Session, video_ids: list[str]) -> dict[str, str]:
+    """Competitor-video thumbnail urls for a page of niche events (one batched
+    query), so a Radar card can show the video's packaging. Empty urls are
+    dropped so the card falls back to its placeholder rather than a broken image."""
+    got = _titles(s, CompetitorVideoRow.video_id, CompetitorVideoRow.thumbnail_url, video_ids)
+    return {k: v for k, v in got.items() if v}
+
+
 def channel_titles(s: Session, channel_ids: list[str]) -> dict[str, str]:
     """Competitor-channel titles for a page of events (one batched query)."""
     return _titles(s, CompetitorChannelRow.channel_id, CompetitorChannelRow.title, channel_ids)

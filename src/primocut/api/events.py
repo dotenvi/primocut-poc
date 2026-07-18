@@ -33,7 +33,7 @@ def _naive(ts: datetime | None) -> datetime | None:
     return ts.astimezone(timezone.utc).replace(tzinfo=None) if ts.tzinfo else ts
 
 
-def _event_dict(row, badges, vtitles, ctitles, ltitles) -> dict[str, Any]:
+def _event_dict(row, badges, vtitles, ctitles, ltitles, vthumbs) -> dict[str, Any]:
     return {
         "id": row.id,
         "category": row.category,
@@ -53,6 +53,9 @@ def _event_dict(row, badges, vtitles, ctitles, ltitles) -> dict[str, Any]:
         # live (ops), plus the channel. Resolved on read — the payload stays lean.
         "title": vtitles.get(row.video_id) or ltitles.get(row.live_id),
         "channel_title": ctitles.get(row.channel_id),
+        # The competitor video's thumbnail (Radar card image); None for an ops row
+        # or a video with no stored url, so the card falls back to its placeholder.
+        "thumbnail_url": vthumbs.get(row.video_id),
     }
 
 
@@ -61,7 +64,8 @@ def _serialise(s, rows) -> list[dict]:
     vtitles = erepo.video_titles(s, [r.video_id for r in rows])
     ctitles = erepo.channel_titles(s, [r.channel_id for r in rows])
     ltitles = erepo.live_titles(s, [r.live_id for r in rows])
-    return [_event_dict(r, badges, vtitles, ctitles, ltitles) for r in rows]
+    vthumbs = erepo.video_thumbnails(s, [r.video_id for r in rows])
+    return [_event_dict(r, badges, vtitles, ctitles, ltitles, vthumbs) for r in rows]
 
 
 def build_events_router(*, get_db: Callable) -> APIRouter:

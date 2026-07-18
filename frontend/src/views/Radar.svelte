@@ -160,7 +160,19 @@
         on:click={() => openEvent(ev)}
         on:keydown={(e) => e.key === 'Enter' && openEvent(ev)}
       >
-        <div class="w-[78px] h-11 rounded-[3px] bg-sunk border border-line shrink-0 grid place-items-center font-mono text-[8px] text-ink-3">thumb</div>
+        <div class="w-[78px] h-11 rounded-[3px] bg-sunk border border-line shrink-0 grid place-items-center overflow-hidden font-mono text-[8px] text-ink-3">
+          {#if ev.thumbnail_url}
+            <img
+              src={ev.thumbnail_url}
+              alt=""
+              loading="lazy"
+              class="w-full h-full object-cover"
+              on:error={(e) => (e.currentTarget.style.display = 'none')}
+            />
+          {:else}
+            thumb
+          {/if}
+        </div>
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2 flex-wrap">
             <span class="tag {tag.cls}">{tag.text}</span>
