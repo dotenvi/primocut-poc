@@ -122,9 +122,11 @@ def create_app() -> FastAPI:
                 detail="video is being processed; stop it before deleting",
             )
 
+    from .events import build_events_router
     from .metrics import build_metrics_router
     from .projects import build_projects_router
 
+    app.include_router(build_events_router(get_db=get_db))
     app.include_router(
         build_projects_router(
             get_db=get_db,
