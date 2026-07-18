@@ -36,7 +36,7 @@
   .ev.seen { @apply bg-transparent border-0 border-t border-line rounded-none px-0.5 py-2 mb-0 gap-2.5; }
   .kv      { @apply flex justify-between items-center py-1.5 border-t border-line text-[13px] first:border-t-0; }
   .pat     { @apply flex items-center gap-2.5 py-1.5 border-t border-line text-[12.5px] first:border-t-0; }
-  .topic   { @apply px-3 py-2 border border-transparent rounded-md cursor-pointer hover:bg-card; }
+  .topic   { @apply px-3 py-2 border border-transparent rounded-md hover:bg-card; }
   .topic.on{ @apply bg-card2 border-line-strong; }
   .st      { @apply w-2 h-2 rounded-full bg-[#2B323A] shrink-0; }
   .st-l    { @apply w-3.5 h-px bg-line-strong; }
