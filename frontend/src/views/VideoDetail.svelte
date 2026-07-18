@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte'
   import { api, enrichActive, youtubeWatch } from '../lib/api.js'
   import Sparkline from '../components/Sparkline.svelte'
-  import { compactNumber, pct, vphLabel, multiplier, shortDate, hms } from '../lib/format.js'
+  import { compactNumber, pct, vphLabel, multiplier, bandLabel, shortDate, hms } from '../lib/format.js'
 
   export let pid
   export let cid
@@ -94,14 +94,14 @@
   <section class="tiles">
     <article class="card tile">
       <h3>Outlier</h3>
-      {#if data.outlier.status === 'insufficient_data'}
-        <p class="muted">Insufficient data — fewer than the minimum same-format peers to score against.</p>
+      {#if data.outlier.status === 'insufficient_sample'}
+        <p class="muted">Insufficient sample — fewer than the minimum same-format peers to score against.</p>
       {:else}
         <div class="tile-row">
           <span>Score</span>
           <b class="mono">
-            {multiplier(data.outlier.score)}
-            {#if data.outlier.bracket}<span class="badge st-done">≥{data.outlier.bracket}</span>{/if}
+            {multiplier(data.outlier.median_multiple)}
+            {#if data.outlier.band}<span class="badge st-done">{bandLabel(data.outlier)}</span>{/if}
             {#if data.outlier.provisional}<span class="status status-provisional">provisional</span>{/if}
           </b>
         </div>

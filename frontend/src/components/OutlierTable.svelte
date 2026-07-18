@@ -1,5 +1,5 @@
 <script>
-  import { compactNumber, vphLabel, multiplier } from '../lib/format.js'
+  import { compactNumber, vphLabel, multiplier, bandLabel } from '../lib/format.js'
 
   export let rows = []
   export let pid // project id — needed to build video-detail links
@@ -35,8 +35,8 @@
               {#if r.provisional}<span class="status status-provisional">provisional</span>{/if}
             </td>
             {#if showChannel}<td class="muted">{r.channel_title || r.channel_id}</td>{/if}
-            <td class="num mono">{multiplier(r.score)}</td>
-            <td>{#if r.bracket}<span class="badge st-done">≥{r.bracket}</span>{/if}</td>
+            <td class="num mono">{multiplier(r.median_multiple)}</td>
+            <td>{#if r.band}<span class="badge st-done">{bandLabel(r)}</span>{/if}</td>
             {#if showChannel}<td class="num mono">{vphLabel(r.current_vph)}</td>{/if}
             <td class="num mono">{compactNumber(r.views)}</td>
           </tr>

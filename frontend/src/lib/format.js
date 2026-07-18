@@ -48,6 +48,28 @@ export function multiplier(x) {
   return x.toFixed(1) + '×'
 }
 
+// Band badge combining the ordinal band with its evidence, so the same ordinal
+// reads correctly under either basis: "p99 exceptional" (percentile) or
+// "10× exceptional" (fixed multiple). '' when the video reached no band.
+export function bandLabel(row) {
+  if (!row || !row.band) return ''
+  if (row.band_basis === 'percentile' && row.percentile != null) {
+    return `p${row.percentile} ${row.band}`
+  }
+  const cut = row.band_cutoffs && row.band_cutoffs[row.band]
+  return cut != null ? `${cut}× ${row.band}` : row.band
+}
+
+// A 0..1 proportion with its [lo, hi] interval, e.g. (0.78, [0.55, 0.93]) ->
+// "78% [55–93%]". Shows the interval next to the point estimate so a wide (small
+// sample) interval is visible. '—' for a null proportion.
+export function pctCi(freq, ci) {
+  if (freq == null) return '—'
+  if (!ci) return pct(freq)
+  const bound = (r) => (r * 100).toFixed(0)
+  return `${pct(freq)} [${bound(ci[0])}–${bound(ci[1])}%]`
+}
+
 // ISO date (naive UTC) -> short local date, e.g. "2026-05-01". '' for null.
 export function shortDate(iso) {
   if (!iso) return ''

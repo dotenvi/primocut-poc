@@ -3,7 +3,7 @@
   import { api } from '../lib/api.js'
   import OutlierTable from '../components/OutlierTable.svelte'
   import FormatTabs from '../components/FormatTabs.svelte'
-  import { pct, vphLabel, multiplier, shortDate } from '../lib/format.js'
+  import { vphLabel, multiplier, pctCi, shortDate } from '../lib/format.js'
 
   export let pid
 
@@ -111,12 +111,13 @@
       counts={{ long: data.patterns.long.length, short: data.patterns.short.length }}
     />
     {#if data.patterns[patternFmt].length === 0}
-      <p class="muted">Not enough definitive outliers yet to report patterns.</p>
+      <p class="muted">No attribute separates outliers from the control group yet.</p>
     {:else}
       <p class="muted">
-        Packaging attributes among definitive outliers vs. the same-format population. Each source
-        is measured against the videos analysed for it, so AI patterns appear only once enough
-        outliers have been enriched.
+        Packaging attributes whose frequency among definitive outliers separates (95% Wilson
+        interval) from the same-format control — a positive pattern to copy or a negative one to
+        avoid. Each source is measured against the videos analysed for it, so AI patterns appear
+        only once enough outliers have been enriched.
       </p>
       <div class="otable-wrap">
         <table class="otable">
@@ -124,10 +125,10 @@
             <tr>
               <th>Attribute</th>
               <th>Source</th>
+              <th>Verdict</th>
               <th class="num">Outliers</th>
-              <th class="num">Population</th>
+              <th class="num">Control</th>
               <th class="num">Lift</th>
-              <th class="num">n</th>
             </tr>
           </thead>
           <tbody>
@@ -135,10 +136,14 @@
               <tr>
                 <td>{p.attribute}</td>
                 <td><span class="tag">{p.source}</span></td>
-                <td class="num mono">{pct(p.outlier_rate)}</td>
-                <td class="num mono">{pct(p.population_rate)}</td>
+                <td>
+                  <span class="badge {p.verdict === 'positive' ? 'st-done' : 'st-failed'}">
+                    {p.verdict}
+                  </span>
+                </td>
+                <td class="num mono">{pctCi(p.freq_outlier, p.ci_outlier)} <span class="muted">(n={p.n_outlier})</span></td>
+                <td class="num mono">{pctCi(p.freq_control, p.ci_control)} <span class="muted">(n={p.n_control})</span></td>
                 <td class="num mono">{multiplier(p.lift)}</td>
-                <td class="num mono muted">{p.outlier_occurrences}</td>
               </tr>
             {/each}
           </tbody>
