@@ -11,8 +11,10 @@
 
 PRIMOCUT attacks the two most expensive problems of running YouTube clip channels:
 
-1. **Finding what to clip in your own material.** The application receives the URL of a YouTube live (podcast, stream), downloads the audio and the chat replay, transcribes it with timestamps and, on demand, uses AI to generate an index of the topics that were discussed. The user reads the report — instead of watching 3-4 hours of video — and identifies the passages they want to turn into clips.
-2. **Knowing what works in the niche.** Competitor channels, grouped into projects (one project per clip channel/niche the user runs), are continuously monitored through public data. The system surfaces outlier videos, packaging patterns (title/thumbnail), posting strategy and audience reaction, so editorial decisions are driven by evidence instead of intuition.
+1. **Finding what to clip in your own material.** The application receives the URL of a YouTube live (podcast, stream) **within a project** (see below), downloads the audio and the chat replay, transcribes it with timestamps and, on demand, uses AI to generate an index of the topics that were discussed. The user reads the report — instead of watching 3-4 hours of video — and identifies the passages they want to turn into clips. A live exists to become clips for a niche, so it is **contained in exactly one project** (1 live → 1 project → N own channels).
+2. **Knowing what works in the niche.** Competitor channels, grouped into projects, are continuously monitored through public data. The system surfaces outlier videos, packaging patterns (title/thumbnail), posting strategy and audience reaction, so editorial decisions are driven by evidence instead of intuition.
+
+A **project is a NICHE** — not a single channel. One niche holds several of the user's **own channels** (where the clips get posted), the **competitor channels** watched for that niche, and the **lives** submitted for cutting. Containment, not filtering: a gaming live never belongs to a politics niche.
 
 ## Live report (Phases 0–1 — delivered)
 
@@ -27,7 +29,7 @@ From a URL, a navigable report containing:
 
 Given competitor channels supplied by the user (no niche-wide discovery), grouped into **projects**:
 
-- **Projects**: competitor channels are global entities linked to projects via M:N. The same channel in two projects is collected once; per-channel metrics are computed once; niche-level reports (rankings, pattern distributions) are scoped per project so one niche never contaminates another. Detaching a channel keeps its history; orphaned channels stop being collected until re-linked.
+- **Projects (niches)**: a project is a niche. It owns its **lives** and its **own channels** (direct 1:N — the clip destinations), while **competitor** channels are global entities linked to projects via M:N. The same competitor channel in two projects is collected once; per-channel metrics are computed once; niche-level reports (rankings, pattern distributions) are scoped per project so one niche never contaminates another. Detaching a competitor channel keeps its history; orphaned channels stop being collected until re-linked. Own channels are the user's own channels inside the niche and are not to be confused with competitor channels; they receive no snapshots in this phase.
 - **Continuous collection** (YouTube Data API v3): backfill of the last 120 videos per new channel, which also records that channel's first snapshot so the dashboards are populated right away; snapshots daily for all videos and every 6h for videos younger than 7 days (views, likes, comment counts, channel stats); packaging-change detection by comparing title strings and thumbnail **content hashes** between snapshots; quota accounting on every cycle.
 - **Metrics engine** (deterministic, no LLM cost): outlier classification into bands (relevant/strong/exceptional) over a rolling window, with separate rulers for Shorts vs long-form and provisional scores under 7 days of age. The **default basis is percentile** — the band cutoffs are the channel's own p90/p97/p99 (nearest-rank), so ~10% of a channel lands in the tail; the readable **median multiple** ("20.6× the median") is still shown but no longer classifies. Fixed multiples (3x/6x/10x) are a demoted **legacy basis**: on the skewed YouTube view distribution 3× the median lands around the channel's p72, marking ~30% of videos as outliers and — because that population then contaminated the pattern denominator — flattening every lift toward 1.0. Also: views-per-hour from snapshot deltas; resurgence alerts; packaging-change before/after impact; engagement rates; cadence; per-project conditional distributions of title/thumbnail attributes comparing outliers against a censored **control** group (band-less, mature, sufficient-baseline; provisional videos excluded from both), gated by **non-overlap of 95% Wilson intervals** in either direction (positive pattern or anti-pattern).
 - **AI enrichment (opt-in — costs LLM)**: structured thumbnail attributes via vision model and title semantics via cheap model, cached by content hash and shared across projects. **Comments**: collection is automatic (top-liked comments fetched when a video is a definitive outlier, stored raw, quota-accounted); only the LLM synthesis pass is triggered manually — recurring themes, overall sentiment and the audience's **explicit requests** (guests, subjects, formats), which the project dashboard aggregates into a ranked demand list for the niche. Every quote it shows is a real comment: the model selects comment indices, never text.
@@ -81,7 +83,7 @@ Given competitor channels supplied by the user (no niche-wide discovery), groupe
 
 Live report:
 
-- **Video**: id, url, title, channel, duration, status (queued/downloading/transcribing/analyzing/done/error)
+- **Video** (a submitted live): id, **project_id** (the niche it is contained in — required), url, title, channel, duration, status (queued/downloading/transcribing/analyzing/done/error)
 - **Transcript**: video_id, segments [{start, end, text}], language, model used
 - **ChatSignal**: video_id, time series [{minute, msgs, laughs, emotes}], detected peaks [{ts, intensity}]
 - **Topic**: video_id, title, summary, ts_start, ts_end, score
@@ -89,7 +91,8 @@ Live report:
 
 Competitor modeling:
 
-- **Project**: id, name, description, active
+- **Project** (a niche): id, name, description, active — contains its lives (1:N), own channels (1:N) and, via M:N, the competitor channels watched for the niche
+- **OwnChannel** (the user's own channel inside the niche — clip destination): id, project_id, channel_url, handle, title, role (nullable: 'main' | 'shorts' | free), added_at. Unique (project_id, channel_url). Distinct from CompetitorChannel; receives no snapshots in this phase
 - **CompetitorChannel** (global): channel_id, handle, title, uploads_playlist_id, active — linked to projects via **ProjectChannel** (M:N)
 - **ChannelSnapshot**: channel_id, captured_at, subscribers, total_views, video_count
 - **CompetitorVideo**: channel_id, video_id, title, published_at, duration_s, is_short, thumbnail_hash, comments_state
@@ -110,7 +113,7 @@ An outlier score does not survive a recompute: "crossed p90 yesterday at 14h" wo
 - **One source of truth**: automatic comment collection is a **consumer** of `outlier_crossed` (it no longer re-detects), removing the old risk of collecting twice or never.
 - **Niche vs ops**: niche events are channel facts written once with `project_id` NULL, attributed to projects **on read** by joining `project_channels` — a channel in two projects yields one row rendered with two badges, never a duplicate. Ops events are project-scoped failures (severity=error) that clear via `resolved_at` and are never marked "seen" (a failure does not resolve by being looked at); niche events carry a dismissible `seen_at`.
 - **Endpoints**: `GET /api/events?category=niche&project_id=&since=&limit=` (feed with badges), `GET /api/alerts` (open ops), `GET /api/activity` (full paginated log + quota accounting), `POST /api/events/seen` (mark a set of ids or everything up to a timestamp).
-- Producers wired today: `outlier_crossed`, `packaging_changed`, and the per-cycle `cycle_done` (quota accounting). Planned producers: `resurgence`, `packaging_verdict`, `backfill_done`, and the ops events (`pipeline_failed`, `comments_disabled`, `quota_exhausted`).
+- Producers wired today: `outlier_crossed`, `packaging_changed`, the per-cycle `cycle_done` (quota accounting), and the ops event `pipeline_failed` (severity=error, carrying `project_id` + `live_id`, emitted when a live's pipeline fails). Planned producers: `resurgence`, `packaging_verdict`, `backfill_done`, and the remaining ops events (`comments_disabled`, `quota_exhausted`).
 
 ## Technical guidelines
 
