@@ -10,7 +10,36 @@ unstable: breaking changes may land in any minor release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-18
+
+### Added
+
+- **A new navigation architecture: events are global, patterns are per project.**
+  **Radar** (a cross-project feed of what happened in the niches) and **Activity**
+  (the system log) now sit above the projects; each project contains **Lives**,
+  **Niche** and **Settings**. Selecting a project is a route, not a dropdown, and
+  every destination is a linkable hash URL with working back/forward.
+- **Cut room — the bridge between the two halves of the product.** A live's page
+  gains a **Packaging kit** panel fed by the niche's own patterns (attributes with
+  real lift, reference outliers, the audience's explicit requests), and chat peaks
+  now join the topic list as first-class clip candidates.
+- **"Channel spread" distribution strip**, one render shared by the Radar cards and
+  the competitor video detail, backed by a single new endpoint
+  `GET /api/channels/{cid}/distribution?format=` (one call per page) and its batch
+  form `GET /api/channels/distribution?channel_ids=&format=` (one call per Radar
+  page — bounded by channels, never an N+1 or a snapshot scan).
+- **Tailwind CSS build** (Manrope + DM Mono) replaces the hand-rolled stylesheet and
+  the Play CDN; the design tokens are ported verbatim from the approved prototype.
+- `GET /api/projects` now carries `live_count`; `GET /api/projects/{pid}` carries a
+  read-only `band_config`; the event feed resolves each event's `title` and
+  `channel_title` on read, so a Radar card names the video and channel without the
+  payload having to store them.
+
 ### Changed
+
+- **"Competitors" is renamed "Niche"**, "Submit" becomes a **+ New live** button
+  inside Lives, and the per-channel dashboard is now a drill-down of Niche ›
+  Channels rather than a top-level destination.
 
 - **The dashboards never blend Shorts with long-form** — Shorts and long-form
   monetise differently, target different audiences and are different formats, so

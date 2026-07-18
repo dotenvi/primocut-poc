@@ -27,8 +27,10 @@ core, differing only by injected `Store` + `ProgressReporter`.
   `primocut worker` (RQ job `process_video` in `worker/jobs.py`, `DbStore` +
   `DbReporter`). SQLite (`db/`) is the **sole** channel between API and worker; the
   UI polls `/api` every ~2 s (no SSE/WebSocket). Transcription is serialized by a
-  Redis GPU lock (one at a time). WebUI (`frontend/`, Svelte 5 + Vite) owns
-  presentation only — no business logic, never touches DB/queue/pipeline directly.
+  Redis GPU lock (one at a time). WebUI (`frontend/`, Svelte 5 + Vite + Tailwind
+  CSS, hash routing) owns presentation only — no business logic, never touches
+  DB/queue/pipeline directly. The IA is Radar/Activity (global) above per-project
+  Lives/Niche/Settings; see `docs/PRIMOCUT.md` § Interface and navigation.
 
 ## Golden rule (analysis)
 

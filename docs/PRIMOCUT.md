@@ -115,6 +115,36 @@ An outlier score does not survive a recompute: "crossed p90 yesterday at 14h" wo
 - **Endpoints**: `GET /api/events?category=niche&project_id=&since=&limit=` (feed with badges), `GET /api/alerts` (open ops), `GET /api/activity` (full paginated log + quota accounting), `POST /api/events/seen` (mark a set of ids or everything up to a timestamp).
 - Producers wired today: `outlier_crossed`, `packaging_changed`, the per-cycle `cycle_done` (quota accounting), and the ops event `pipeline_failed` (severity=error, carrying `project_id` + `live_id`, emitted when a live's pipeline fails). Planned producers: `resurgence`, `packaging_verdict`, `backfill_done`, and the remaining ops events (`comments_disabled`, `quota_exhausted`).
 
+## Interface and navigation
+
+The information architecture follows the one principle that shapes the product:
+**events are global, patterns are per project.** Channel metrics do not depend on
+any project, so the **Radar** (the cross-project event feed) and **Activity** (the
+system log) sit *above* the projects; niche analysis is scoped to a project, so
+everything else lives *inside* one. The project is the container — it is a route,
+not a dropdown buried in a menu. Every destination is a linkable URL and the
+browser's back/forward buttons work (hash routing; no hidden project state).
+
+| Route | Screen |
+|---|---|
+| `/` | **Radar** — a "Needs you" band of open failures (with a direct Requeue), then the niche event feed with project badges, per-project filter and *Mark all as seen*. Success is silent (a finished pipeline never enters the feed); failure is loud. |
+| `/activity` | The full system log + quota accounting. |
+| `/p/{pid}/lives` | The project's lives. **+ New live** is a button here (not a menu item). |
+| `/p/{pid}/lives/{lid}` | **Cut room** — the bridge: player, a pipeline stage rail, topics (with chat peaks folded in), and a **Packaging kit** panel fed by the niche's patterns. |
+| `/p/{pid}/niche` | **Niche** — tabs *Patterns \| Outliers \| Channels*. |
+| `/p/{pid}/niche/channels/{cid}` | A tracked channel's dashboard (a drill-down of the Channels tab, no longer a top-level destination). |
+| `/p/{pid}/niche/channels/{cid}/videos/{vid}` | A competitor video's detail, with the channel-spread strip. |
+| `/p/{pid}/settings` | The project's own channels + the outlier bands (read-only — bands are global config). |
+
+Vocabulary, consistent across the UI (English): **Niche** (was "Competitors"),
+**Cut room** (a live's page), **Radar** and **Activity** (the global feeds). The
+"channel spread" strip — a per-channel/-format view histogram with this video's bar
+highlighted — is one component shared by the Radar cards and the video detail, both
+reading `GET /api/channels/{cid}/distribution?format=` (single) or its
+`?channel_ids=` batch. Opt-in AI enrichment uses a deliberate teal `btn-ai` style;
+red is reserved for failure. The web UI is built with Tailwind CSS (Manrope + DM
+Mono), tokens ported from the approved navigation prototype.
+
 ## Technical guidelines
 
 1. **Project language is English**: every comment, docstring, identifier, log/error message and user-facing string is written in English, and so is the product documentation. Any new code follows the same rule.
