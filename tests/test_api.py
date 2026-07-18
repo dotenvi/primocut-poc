@@ -1,4 +1,7 @@
-"""Tests for the FastAPI API (TestClient, temporary DB, fake queue, inline worker)."""
+"""Tests for the FastAPI API (TestClient, temporary DB, fake queue, inline worker).
+
+Lives are project-scoped: every route lives under /api/projects/{pid}/lives.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +9,6 @@ import contextlib
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 from fastapi.testclient import TestClient
 
 from primocut.api.app import (
@@ -17,6 +19,7 @@ from primocut.api.app import (
     get_stopper,
 )
 from primocut.config import Settings
+from primocut.db import competitors as crepo
 from primocut.db import repo
 from primocut.db.session import Database
 from primocut.models import ChatSignal, Peak, Segment, Transcript, Video, VideoStatus
@@ -55,6 +58,11 @@ def _db(tmp_path) -> Database:
     return db
 
 
+def _project(db, name: str = "P") -> int:
+    with db.session() as s:
+        return crepo.create_project(s, name).id
+
+
 def _client(db, queue=None) -> TestClient:
     app = create_app()
     data_dir = Path(db.engine.url.database).parent  # same tmp as the database
@@ -65,10 +73,11 @@ def _client(db, queue=None) -> TestClient:
     return TestClient(app)
 
 
-def _seed_done(db, tmp_path, vid="v1"):
+def _seed_done(db, tmp_path, pid, vid="v1"):
     with db.session() as s:
         repo.upsert_video(s, Video(id=vid, url=f"https://youtube.com/watch?v={vid}",
-                                   title="", channel="", duration=0.0, status=VideoStatus.QUEUED))
+                                   title="", channel="", duration=0.0,
+                                   status=VideoStatus.QUEUED, project_id=pid))
     process_video(
         vid, database=db, create_topics=True,
         settings=Settings(data_dir=tmp_path, db_path=tmp_path / "t.db", retry_base_delay=0.0),
@@ -82,22 +91,33 @@ def _seed_done(db, tmp_path, vid="v1"):
 # --------------------------- submit ---------------------------
 
 
-def test_submit_creates_video_and_enqueues(tmp_path):
+def test_submit_creates_live_and_enqueues(tmp_path):
     db = _db(tmp_path)
+    pid = _project(db)
     q = _FakeQueue()
     client = _client(db, q)
-    r = client.post("/api/videos", json={"url": "https://www.youtube.com/watch?v=SDUQEa7FAms"})
+    r = client.post(f"/api/projects/{pid}/lives",
+                    json={"url": "https://www.youtube.com/watch?v=SDUQEa7FAms"})
     assert r.status_code == 201
     assert r.json()["video_id"] == "SDUQEa7FAms"
     assert q.calls == [("SDUQEa7FAms",)]
     with db.session() as s:
-        assert repo.get_video(s, "SDUQEa7FAms").status == "queued"
+        row = repo.get_video(s, "SDUQEa7FAms")
+        assert row.status == "queued" and row.project_id == pid
 
 
 def test_submit_rejects_invalid_url(tmp_path):
-    client = _client(_db(tmp_path))
-    r = client.post("/api/videos", json={"url": "not a youtube url"})
+    db = _db(tmp_path)
+    pid = _project(db)
+    r = _client(db).post(f"/api/projects/{pid}/lives", json={"url": "not a youtube url"})
     assert r.status_code == 400
+
+
+def test_submit_unknown_project_404(tmp_path):
+    db = _db(tmp_path)
+    r = _client(db).post("/api/projects/999/lives",
+                         json={"url": "https://www.youtube.com/watch?v=SDUQEa7FAms"})
+    assert r.status_code == 404
 
 
 # --------------------------- list / detail ---------------------------
@@ -105,18 +125,20 @@ def test_submit_rejects_invalid_url(tmp_path):
 
 def test_list_and_detail(tmp_path):
     db = _db(tmp_path)
-    _seed_done(db, tmp_path)
+    pid = _project(db)
+    _seed_done(db, tmp_path, pid)
     client = _client(db)
-    lst = client.get("/api/videos").json()
+    lst = client.get(f"/api/projects/{pid}/lives").json()
     assert any(v["id"] == "v1" and v["status"] == "done" and v["progress"] == 100 for v in lst)
-    detail = client.get("/api/videos/v1").json()
+    detail = client.get(f"/api/projects/{pid}/lives/v1").json()
     assert detail["title"] == "T"
     assert detail["job"]["status"] == "finished"
 
 
 def test_detail_404(tmp_path):
-    client = _client(_db(tmp_path))
-    assert client.get("/api/videos/nope").status_code == 404
+    db = _db(tmp_path)
+    pid = _project(db)
+    assert _client(db).get(f"/api/projects/{pid}/lives/nope").status_code == 404
 
 
 # --------------------------- report ---------------------------
@@ -124,8 +146,9 @@ def test_detail_404(tmp_path):
 
 def test_report_structure_and_links(tmp_path):
     db = _db(tmp_path)
-    _seed_done(db, tmp_path)
-    rep = _client(db).get("/api/videos/v1/report").json()
+    pid = _project(db)
+    _seed_done(db, tmp_path, pid)
+    rep = _client(db).get(f"/api/projects/{pid}/lives/v1/report").json()
     assert rep["video"]["title"] == "T"
     assert rep["job"]["status"] == "finished" and rep["job"]["progress"] == 100
     # Per-stage timing captured end-to-end by the reporter and surfaced for the UI.
@@ -140,11 +163,12 @@ def test_report_structure_and_links(tmp_path):
 
 def test_report_fire_flag_from_chat_peak(tmp_path):
     db = _db(tmp_path)
-    _seed_done(db, tmp_path)
+    pid = _project(db)
+    _seed_done(db, tmp_path, pid)
     with db.session() as s:  # peak at ts=5 falls inside topic A [0,20]
         repo.save_chat_signal(s, ChatSignal(video_id="v1", per_minute=[],
                                             peaks=[Peak(ts=5.0, intensity=50.0, z=3.0)]))
-    rep = _client(db).get("/api/videos/v1/report").json()
+    rep = _client(db).get(f"/api/projects/{pid}/lives/v1/report").json()
     assert rep["topics"][0]["fire"] is True
 
 
@@ -153,9 +177,10 @@ def test_report_fire_flag_from_chat_peak(tmp_path):
 
 def test_reenqueue(tmp_path):
     db = _db(tmp_path)
-    _seed_done(db, tmp_path)
+    pid = _project(db)
+    _seed_done(db, tmp_path, pid)
     q = _FakeQueue()
-    r = _client(db, q).post("/api/videos/v1/reenqueue")
+    r = _client(db, q).post(f"/api/projects/{pid}/lives/v1/reenqueue")
     assert r.status_code == 202
     assert q.calls == [("v1",)]
 
@@ -165,9 +190,10 @@ def test_reenqueue(tmp_path):
 
 def test_generate_topics_endpoint(tmp_path):
     db = _db(tmp_path)
-    _seed_done(db, tmp_path)  # done, with topics cached
+    pid = _project(db)
+    _seed_done(db, tmp_path, pid)  # done, with topics cached
     q = _FakeQueue()
-    r = _client(db, q).post("/api/videos/v1/topics")
+    r = _client(db, q).post(f"/api/projects/{pid}/lives/v1/topics")
     assert r.status_code == 202
     assert q.calls == [("v1",)]  # enqueued a topics run for v1
     with db.session() as s:
@@ -176,7 +202,9 @@ def test_generate_topics_endpoint(tmp_path):
 
 
 def test_generate_topics_404(tmp_path):
-    assert _client(_db(tmp_path)).post("/api/videos/nope/topics").status_code == 404
+    db = _db(tmp_path)
+    pid = _project(db)
+    assert _client(db).post(f"/api/projects/{pid}/lives/nope/topics").status_code == 404
 
 
 # --------------------------- stop / delete ---------------------------
@@ -184,21 +212,25 @@ def test_generate_topics_404(tmp_path):
 
 def test_stop_endpoint(tmp_path):
     db = _db(tmp_path)
-    _seed_done(db, tmp_path)
-    r = _client(db).post("/api/videos/v1/stop")
+    pid = _project(db)
+    _seed_done(db, tmp_path, pid)
+    r = _client(db).post(f"/api/projects/{pid}/lives/v1/stop")
     assert r.status_code == 200 and r.json()["status"] == "stopped"
     with db.session() as s:
         assert repo.get_video(s, "v1").status == "stopped"
 
 
 def test_stop_404(tmp_path):
-    assert _client(_db(tmp_path)).post("/api/videos/nope/stop").status_code == 404
+    db = _db(tmp_path)
+    pid = _project(db)
+    assert _client(db).post(f"/api/projects/{pid}/lives/nope/stop").status_code == 404
 
 
 def test_delete_endpoint_purges(tmp_path):
     db = _db(tmp_path)
-    _seed_done(db, tmp_path)  # status done
-    r = _client(db).delete("/api/videos/v1")
+    pid = _project(db)
+    _seed_done(db, tmp_path, pid)  # status done
+    r = _client(db).delete(f"/api/projects/{pid}/lives/v1")
     assert r.status_code == 200
     with db.session() as s:
         assert repo.get_video(s, "v1") is None
@@ -206,7 +238,9 @@ def test_delete_endpoint_purges(tmp_path):
 
 def test_delete_refuses_when_active(tmp_path):
     db = _db(tmp_path)
+    pid = _project(db)
     with db.session() as s:
         repo.upsert_video(s, Video(id="v1", url="https://youtube.com/watch?v=v1",
-                                   title="", channel="", duration=0.0, status=VideoStatus.QUEUED))
-    assert _client(db).delete("/api/videos/v1").status_code == 409
+                                   title="", channel="", duration=0.0,
+                                   status=VideoStatus.QUEUED, project_id=pid))
+    assert _client(db).delete(f"/api/projects/{pid}/lives/v1").status_code == 409

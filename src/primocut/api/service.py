@@ -14,9 +14,9 @@ from ..db import repo
 from ..models import format_timestamp, youtube_url
 
 
-def list_videos(s: Session) -> list[dict[str, Any]]:
+def list_videos(s: Session, project_id: int) -> list[dict[str, Any]]:
     out = []
-    for v in repo.list_videos(s):
+    for v in repo.list_project_lives(s, project_id):
         job = repo.latest_job(s, v.id)
         out.append({
             "id": v.id, "title": v.title, "channel": v.channel, "status": v.status,
@@ -27,8 +27,8 @@ def list_videos(s: Session) -> list[dict[str, Any]]:
     return out
 
 
-def video_detail(s: Session, video_id: str) -> dict[str, Any] | None:
-    v = repo.get_video(s, video_id)
+def video_detail(s: Session, project_id: int, video_id: str) -> dict[str, Any] | None:
+    v = repo.get_project_live(s, project_id, video_id)
     if v is None:
         return None
     job = repo.latest_job(s, video_id)
@@ -42,8 +42,8 @@ def video_detail(s: Session, video_id: str) -> dict[str, Any] | None:
     }
 
 
-def build_report(s: Session, video_id: str) -> dict[str, Any] | None:
-    v = repo.get_video(s, video_id)
+def build_report(s: Session, project_id: int, video_id: str) -> dict[str, Any] | None:
+    v = repo.get_project_live(s, project_id, video_id)
     if v is None:
         return None
     transcript = repo.get_transcript(s, video_id)

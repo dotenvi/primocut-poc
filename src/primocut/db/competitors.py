@@ -19,6 +19,7 @@ from .models import (
     ChannelSnapshotRow,
     CompetitorChannelRow,
     CompetitorVideoRow,
+    OwnChannelRow,
     PackagingChangeRow,
     ProjectChannelRow,
     ProjectRow,
@@ -31,6 +32,10 @@ from .models import (
 
 class ProjectExistsError(Exception):
     """A project with the same name already exists."""
+
+
+class OwnChannelExistsError(Exception):
+    """The same channel_url is already registered in this project."""
 
 
 # ------------------------- Projects -------------------------
@@ -86,6 +91,61 @@ def delete_project(s: Session, project_id: int) -> bool:
     s.flush()
     for channel_id in channel_ids:
         deactivate_if_orphan(s, channel_id)
+    return True
+
+
+# ------------------------- Own channels (the user's, per project) -------------------------
+
+
+def create_own_channel(
+    s: Session,
+    project_id: int,
+    *,
+    channel_url: str,
+    handle: str = "",
+    title: str = "",
+    role: str | None = None,
+) -> OwnChannelRow:
+    """Register one of the user's own channels inside a niche (the clip
+    destination). Rejects a blank URL and a duplicate URL within the project."""
+    channel_url = channel_url.strip()
+    if not channel_url:
+        raise ValueError("channel_url must not be empty.")
+    existing = s.execute(
+        select(OwnChannelRow).where(
+            OwnChannelRow.project_id == project_id,
+            OwnChannelRow.channel_url == channel_url,
+        )
+    ).scalars().first()
+    if existing is not None:
+        raise OwnChannelExistsError(channel_url)
+    row = OwnChannelRow(
+        project_id=project_id, channel_url=channel_url,
+        handle=handle, title=title, role=role,
+    )
+    s.add(row)
+    s.flush()
+    return row
+
+
+def list_own_channels(s: Session, project_id: int) -> list[OwnChannelRow]:
+    return list(
+        s.execute(
+            select(OwnChannelRow)
+            .where(OwnChannelRow.project_id == project_id)
+            .order_by(OwnChannelRow.added_at.desc(), OwnChannelRow.id.desc())
+        ).scalars()
+    )
+
+
+def delete_own_channel(s: Session, project_id: int, own_channel_id: int) -> bool:
+    """Delete one own channel, scoped to its project so a project never deletes
+    another niche's channel. Returns False if there is no such row here."""
+    row = s.get(OwnChannelRow, own_channel_id)
+    if row is None or row.project_id != project_id:
+        return False
+    s.delete(row)
+    s.flush()
     return True
 
 

@@ -35,6 +35,10 @@ def upsert_video(s: Session, video: Video) -> VideoRow:
     if row is None:
         row = VideoRow(id=video.id)
         s.add(row)
+    # project_id is set on creation and kept on re-submit; metadata refreshes
+    # (project_id=None) never move a live out of its niche.
+    if video.project_id is not None:
+        row.project_id = video.project_id
     row.url = video.url
     row.title = video.title
     row.channel = video.channel
@@ -48,9 +52,22 @@ def get_video(s: Session, video_id: str) -> VideoRow | None:
     return s.get(VideoRow, video_id)
 
 
-def list_videos(s: Session) -> list[VideoRow]:
+def get_project_live(s: Session, project_id: int, video_id: str) -> VideoRow | None:
+    """A live scoped to its owning project. Returns None if it does not exist or
+    belongs to another project — the leakage guard for every /lives/{lid} route."""
+    row = s.get(VideoRow, video_id)
+    if row is None or row.project_id != project_id:
+        return None
+    return row
+
+
+def list_project_lives(s: Session, project_id: int) -> list[VideoRow]:
     return list(
-        s.execute(select(VideoRow).order_by(VideoRow.created_at.desc())).scalars()
+        s.execute(
+            select(VideoRow)
+            .where(VideoRow.project_id == project_id)
+            .order_by(VideoRow.created_at.desc())
+        ).scalars()
     )
 
 
@@ -86,6 +103,7 @@ def video_to_model(row: VideoRow) -> Video:
     return Video(
         id=row.id, url=row.url, title=row.title, channel=row.channel,
         duration=row.duration, status=VideoStatus(row.status),
+        project_id=row.project_id,
     )
 
 

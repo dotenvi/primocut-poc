@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from primocut.config import Settings
+from primocut.db import competitors as crepo
 from primocut.db import repo
 from primocut.db.session import Database
 from primocut.models import Segment, Transcript, Video, VideoStatus
@@ -47,9 +48,10 @@ class _FakeLLM:
 
 def _seed_video(db, vid="v1"):
     with db.session() as s:
+        pid = crepo.create_project(s, "P").id
         repo.upsert_video(s, Video(
             id=vid, url=f"https://youtube.com/watch?v={vid}", title="", channel="",
-            duration=0.0, status=VideoStatus.QUEUED,
+            duration=0.0, status=VideoStatus.QUEUED, project_id=pid,
         ))
 
 
@@ -218,6 +220,14 @@ def test_process_video_essential_failure_sets_error(tmp_path):
     with db.session() as s:
         assert repo.get_video(s, "v1").status == "error"
         assert repo.latest_job(s, "v1").status == "failed"
+        # M2: the failure surfaces as an ops event scoped to the niche + live.
+        from primocut.db import events as erepo
+
+        alerts = erepo.list_ops_alerts(s)
+        failed = [e for e in alerts if e.type == "pipeline_failed"]
+        assert len(failed) == 1
+        assert failed[0].project_id == 1 and failed[0].live_id == "v1"
+        assert failed[0].severity == erepo.SEVERITY_ERROR
 
 
 def test_degradation_is_persisted_in_job_warnings(tmp_path):
@@ -288,10 +298,13 @@ def test_enqueue_creates_rows_and_enqueues(tmp_path):
             self.calls.append((fn, args))
             return SimpleNamespace(id="rq1")
 
+    with db.session() as s:
+        pid = crepo.create_project(s, "P").id
+
     fq = _FakeQueue()
     res = enqueue_video(
         "https://www.youtube.com/watch?v=SDUQEa7FAms",
-        settings=_settings(tmp_path), database=db, queue=fq,
+        project_id=pid, settings=_settings(tmp_path), database=db, queue=fq,
     )
     assert res["video_id"] == "SDUQEa7FAms"
     assert fq.calls and fq.calls[0][1] == ("SDUQEa7FAms",)

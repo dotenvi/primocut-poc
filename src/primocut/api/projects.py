@@ -30,6 +30,13 @@ class ChannelIn(BaseModel):
     url: str
 
 
+class OwnChannelIn(BaseModel):
+    channel_url: str
+    handle: str = ""
+    title: str = ""
+    role: str | None = None  # 'main' | 'shorts' | free
+
+
 class EnrichIn(BaseModel):
     kind: str  # "thumbnail" | "title" | "comments"
 
@@ -56,6 +63,17 @@ def _channel_dict(row) -> dict[str, Any]:
             "total": row.backfill_total,
             "error": row.backfill_error,
         },
+    }
+
+
+def _own_channel_dict(row) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "channel_url": row.channel_url,
+        "handle": row.handle,
+        "title": row.title,
+        "role": row.role,
+        "added_at": row.added_at.isoformat(),
     }
 
 
@@ -195,6 +213,40 @@ def build_projects_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+    @router.get("/projects/{project_id}/own-channels")
+    def list_own_channels(project_id: int, db=Depends(get_db)) -> list[dict]:
+        with db.session() as s:
+            if crepo.get_project(s, project_id) is None:
+                raise HTTPException(status_code=404, detail="project not found")
+            return [_own_channel_dict(c) for c in crepo.list_own_channels(s, project_id)]
+
+    @router.post("/projects/{project_id}/own-channels", status_code=201)
+    def add_own_channel(project_id: int, body: OwnChannelIn, db=Depends(get_db)) -> dict:
+        with db.session() as s:
+            if crepo.get_project(s, project_id) is None:
+                raise HTTPException(status_code=404, detail="project not found")
+            try:
+                row = crepo.create_own_channel(
+                    s, project_id, channel_url=body.channel_url,
+                    handle=body.handle, title=body.title, role=body.role,
+                )
+            except crepo.OwnChannelExistsError:
+                raise HTTPException(
+                    status_code=409, detail="channel already in this project"
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            return _own_channel_dict(row)
+
+    @router.delete("/projects/{project_id}/own-channels/{own_channel_id}")
+    def delete_own_channel_endpoint(
+        project_id: int, own_channel_id: int, db=Depends(get_db)
+    ) -> dict:
+        with db.session() as s:
+            if not crepo.delete_own_channel(s, project_id, own_channel_id):
+                raise HTTPException(status_code=404, detail="own channel not found")
+        return {"own_channel_id": own_channel_id}
 
     @router.delete("/projects/{project_id}/channels/{channel_id}")
     def detach_channel_endpoint(

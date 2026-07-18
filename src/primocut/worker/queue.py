@@ -64,26 +64,33 @@ def enqueue_enrichment(
 def enqueue_video(
     url: str,
     *,
+    project_id: int,
     settings: Settings | None = None,
     database=None,
     queue=None,
 ) -> dict:
-    """Validate the URL, (re)create the Video (queued) + Job and enqueue processing."""
+    """Validate the URL, (re)create the Video (queued) + Job and enqueue processing.
+
+    Scoped to a niche: the live is contained in `project_id`. Raises `KeyError`
+    if the project does not exist (the route maps it to 404)."""
     settings = settings or get_settings()
     if database is None:
         from ..db import get_database
 
         database = get_database(settings)
 
+    from ..db import competitors as crepo
     from ..db import repo
 
     url = validate_youtube_url(url)
     video_id = extract_video_id(url)
 
     with database.session() as s:
+        if crepo.get_project(s, project_id) is None:
+            raise KeyError(project_id)
         existing = repo.get_video(s, video_id)
         repo.upsert_video(s, Video(
-            id=video_id, url=url,
+            id=video_id, url=url, project_id=project_id,
             title=existing.title if existing else "",
             channel=existing.channel if existing else "",
             duration=existing.duration if existing else 0.0,

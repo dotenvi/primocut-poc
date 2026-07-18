@@ -64,6 +64,7 @@ class Database:
                         if "duplicate column name" not in msg and "no such column" not in msg:
                             raise
                 s.add(SchemaMigration(version=version))
+            _backfill_video_projects(s)
 
     @contextmanager
     def session(self) -> Iterator[Session]:
@@ -76,6 +77,42 @@ class Database:
             raise
         finally:
             s.close()
+
+
+def _backfill_video_projects(s: Session) -> None:
+    """Give every orphan live a project (migration 007 companion), idempotent.
+
+    Runs after the SQL migrations, inside the same init() session. On a fresh DB
+    `videos.project_id` is NOT NULL from create_all, so there are no orphans and
+    this is a no-op (no 'Default' is ever created on an empty base). On a legacy
+    DB the column was just added nullable: assign the orphans to the oldest
+    project, or create a 'Default' project if none exists, and log the decision.
+    Forward-only like every migration here (there are no down-migrations)."""
+    from .competitors import create_project
+    from .models import ProjectRow, VideoRow
+
+    orphans = list(
+        s.execute(select(VideoRow).where(VideoRow.project_id.is_(None))).scalars()
+    )
+    if not orphans:
+        return
+    oldest = s.execute(
+        select(ProjectRow).order_by(ProjectRow.created_at.asc(), ProjectRow.id.asc())
+    ).scalars().first()
+    if oldest is None:
+        oldest = create_project(s, "Default", "Auto-created for pre-project lives.")
+        logger.info(
+            "Backfill: no project existed, created 'Default' (#%d) for %d orphan live(s).",
+            oldest.id, len(orphans),
+        )
+    else:
+        logger.info(
+            "Backfill: assigned %d orphan live(s) to oldest project '%s' (#%d).",
+            len(orphans), oldest.name, oldest.id,
+        )
+    for v in orphans:
+        v.project_id = oldest.id
+    s.flush()
 
 
 def _pending_sql(current: int) -> list[tuple[int, Path]]:

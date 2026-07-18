@@ -55,6 +55,9 @@ class Video(BaseModel):
     channel: str
     duration: float  # seconds
     status: VideoStatus = VideoStatus.QUEUED
+    # The niche this live belongs to. Optional here (metadata refreshes during
+    # the pipeline don't carry it); required and set once at submit time.
+    project_id: int | None = None
 
 
 class Segment(BaseModel):

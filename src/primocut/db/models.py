@@ -17,6 +17,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     desc,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -31,9 +32,18 @@ class Base(DeclarativeBase):
 
 
 class VideoRow(Base):
+    """A live the user submits to the pipeline. It exists to become clips for a
+    niche, so it is CONTAINED in exactly one project (1 live -> 1 project); the
+    clip (Phase 3) is what fans out to several own channels of that niche."""
+
     __tablename__ = "videos"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)  # YouTube video id
+    # Containment (not a filter): a live belongs to a single niche. NOT NULL —
+    # fresh DBs get it from create_all, legacy rows are backfilled at init().
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
     url: Mapped[str] = mapped_column(String)
     title: Mapped[str] = mapped_column(String, default="")
     channel: Mapped[str] = mapped_column(String, default="")
@@ -116,7 +126,9 @@ class SchemaMigration(Base):
 
 
 class ProjectRow(Base):
-    """A project groups the competitor channels of one niche/clip channel."""
+    """A project is a NICHE. It contains the user's own channels (destinations
+    for the clips) and the competitor channels watched for that niche. It is not
+    a single channel: one niche holds several own channels."""
 
     __tablename__ = "projects"
 
@@ -126,6 +138,27 @@ class ProjectRow(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class OwnChannelRow(Base):
+    """A channel the USER owns inside a niche — where the clips get posted. Owned
+    by exactly one project (direct FK, not the M:N of competitor_channels). Not
+    to be confused with CompetitorChannelRow; receives no snapshots in this phase."""
+
+    __tablename__ = "own_channels"
+    __table_args__ = (
+        UniqueConstraint("project_id", "channel_url", name="uq_own_channel_url_per_project"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    channel_url: Mapped[str] = mapped_column(String)
+    handle: Mapped[str] = mapped_column(String, default="")
+    title: Mapped[str] = mapped_column(String, default="")
+    role: Mapped[str | None] = mapped_column(String, default=None)  # 'main' | 'shorts' | free
+    added_at: Mapped[datetime] = mapped_column(default=_now)
 
 
 class CompetitorChannelRow(Base):

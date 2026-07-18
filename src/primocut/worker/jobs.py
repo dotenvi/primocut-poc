@@ -48,6 +48,7 @@ def process_video(
         if video is None:
             raise ValueError(f"Video {video_id!r} not found in the database.")
         url = video.url
+        project_id = video.project_id
         job = repo.latest_job(s, video_id) or repo.create_job(s, video_id)
         job_id = job.id
         repo.update_job(s, job_id, status="started", error=None)
@@ -82,10 +83,25 @@ def process_video(
             )
     except PipelineError as exc:  # an essential stage failed → error
         logger.error("Job %s failed: %s", job_id, exc)
+        from datetime import datetime, timezone
+
+        from ..db import events as erepo
+
         with database.session() as s:
             repo.append_stage(s, job_id, "__end__")  # close the failed stage
             repo.update_job(s, job_id, status="failed", error=str(exc))
             repo.set_video_status(s, video_id, VideoStatus.ERROR)
+            # Ops alert for the Radar, scoped to the niche and the live it failed on.
+            erepo.add_event(
+                s,
+                category=erepo.CATEGORY_OPS,
+                type="pipeline_failed",
+                severity=erepo.SEVERITY_ERROR,
+                project_id=project_id,
+                live_id=video_id,
+                occurred_at=datetime.now(timezone.utc),
+                payload={"job_id": job_id, "error": str(exc)},
+            )
         raise
 
     with database.session() as s:
