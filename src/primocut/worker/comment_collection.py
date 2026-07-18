@@ -3,14 +3,18 @@
 Runs inside the snapshot cycle. Comments cost YouTube quota but no LLM call, so
 guideline 9 puts them on the schedule — only the synthesis over them is manual.
 
-**Level-triggered, not edge-detected.** Guideline 10 forbids storing scores, so
-there is no previous score to diff against: instead of asking "did this video just
-cross 3x?", each cycle asks "is it a definitive outlier *now*?" and skips whatever
-`comments_state` says is settled. That is idempotent, self-heals across a missed
-cycle, and is the same shape as the syntactic-attribute refresh.
+**A consumer of `outlier_crossed`, not its own detector.** Crossing detection lives
+in ONE place now — the event emission step (`worker/event_emission.py`) that runs
+just before this. This step no longer re-scores anything: it reads the videos that
+have an `outlier_crossed` event and collects the ones still owed comments. One
+source of truth removes the old risk of the two detectors disagreeing (collecting
+twice, or never).
 
-Collect-once by design: an outlier's comment set is fetched a single time and only
-an explicit regeneration fetches it again. Resilience (DEVELOPMENT.md §4): the
+Collect-once by design: an outlier's comment set is fetched a single time (the
+`comments_state` terminal guard below stops a re-cross up the band ladder from
+re-collecting) and only an explicit regeneration fetches it again. An `"error"` is
+NOT terminal, so the video stays in the due set and is retried on a later cycle —
+even though no new event fires for it. Resilience (DEVELOPMENT.md §4): the
 selection and every video are isolated — a disabled or failing video is recorded
 and the cycle carries on.
 """
@@ -48,18 +52,15 @@ def collect_outlier_comments(
     cost the cycle its snapshots.
     """
     from ..db import competitors as crepo
-    from ..metrics import service
+    from ..db import events as erepo
 
     try:
         with database.session() as s:
             due: list[str] = []
-            for cid in channel_ids:
-                for video_id in service.definitive_outlier_ids_for_channel(
-                    s, cid, settings=settings, now=now
-                ):
-                    video = crepo.get_video(s, video_id)
-                    if video is not None and video.comments_state not in TERMINAL_STATES:
-                        due.append(video_id)
+            for video_id in erepo.video_ids_with_outlier_event(s, list(channel_ids)):
+                video = crepo.get_video(s, video_id)
+                if video is not None and video.comments_state not in TERMINAL_STATES:
+                    due.append(video_id)
     except Exception as exc:  # never let selection break the collection cycle
         logger.error("comment collection: could not select outliers: %s", exc)
         return 0
