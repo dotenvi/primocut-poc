@@ -17,6 +17,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    desc,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -192,6 +193,11 @@ class CompetitorVideoRow(Base):
     comments_state: Mapped[str] = mapped_column(String, default="")
     comments_error: Mapped[str] = mapped_column(Text, default="")
     comments_fetched_at: Mapped[datetime | None] = mapped_column(default=None)
+    # Highest outlier band ever EMITTED as an `outlier_crossed` event, for the
+    # anti-flapping guard (see `worker/event_emission.py`). "" means none emitted
+    # yet (below every band); an event fires only on a transition to a strictly
+    # higher band, so a video oscillating around the p90 cut cannot re-emit.
+    last_band_emitted: Mapped[str] = mapped_column(String, default="")
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
@@ -346,3 +352,47 @@ class VideoEnrichmentRow(Base):
     state: Mapped[str] = mapped_column(String, default="done")  # "running" | "done" | "error"
     error: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+# ------------------------- Phase 2: events (append-only) + seen state -------------------------
+#
+# The append-only fact log behind the Radar home. An outlier score / VPH is
+# computed on read and does not survive a recompute, so "crossed the p90 cut
+# yesterday at 14h" is a fact that must be RECORDED when it happens or it is lost.
+# Rows are never mutated except for `seen_at` (niche, dismissible) and
+# `resolved_at` (ops, self-resolving) — the payload is frozen at emission so a
+# later config change cannot rewrite the meaning of a recorded band.
+#
+# A niche event is a fact of the CHANNEL (project_id NULL): it is written ONCE and
+# attributed to projects on read by joining `project_channels`, so a channel in
+# two projects yields one row rendered with two badges, never a duplicate. An ops
+# event is a project-scoped failure (project_id filled, severity="error").
+
+
+class EventRow(Base):
+    __tablename__ = "events"
+    # (category, occurred_at DESC): the Radar feed is `WHERE category=? ORDER BY
+    # occurred_at DESC LIMIT n`, so this index makes it O(limit) — it never scans
+    # the snapshot series to reconstruct when a threshold was crossed.
+    __table_args__ = (Index("ix_events_category_occurred", "category", desc("occurred_at")),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    category: Mapped[str] = mapped_column(String)  # "niche" | "ops"
+    type: Mapped[str] = mapped_column(String)
+    severity: Mapped[str] = mapped_column(String, default="info")  # "info" | "error"
+    # All four subjects are nullable and intentionally NOT foreign keys: the log is
+    # an append-only historical record and must outlive the deletion of any subject
+    # it references. project_id is NULL for niche facts (attributed on read) and
+    # filled for ops failures.
+    project_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    channel_id: Mapped[str | None] = mapped_column(String, default=None)
+    video_id: Mapped[str | None] = mapped_column(String, default=None)
+    live_id: Mapped[str | None] = mapped_column(String, default=None)
+    occurred_at: Mapped[datetime] = mapped_column(default=_now)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    # seen_at is the event's, not the (event, project) pair's: dismissing a niche
+    # event dismisses it everywhere. Ops events are never marked seen — they clear
+    # via resolved_at, because a failure does not resolve by being looked at.
+    seen_at: Mapped[datetime | None] = mapped_column(default=None)
+    resolved_at: Mapped[datetime | None] = mapped_column(default=None)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
