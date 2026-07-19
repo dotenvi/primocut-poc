@@ -224,6 +224,32 @@ def plan_enrichment(session, video_id: str, kind: str) -> Plan | None:
     )
 
 
+def enrichment_plan_counts(session, video_ids, kind: str) -> tuple[list[str], int]:
+    """Split a batch into (to_process, cached) using the very same cache gate the
+    job uses, so a button can show the cost before the click and dispatch only the
+    cache misses.
+
+    `to_process` is every video the job would actually spend an LLM on — the cache
+    misses (a due plan) plus any video that cannot be gated (unknown, or content
+    not hashable yet), which the job attempts and surfaces as a visible error.
+    `cached` is the count whose content hash is unchanged: a re-run skips them for
+    free, so they never recharge and are left out of the dispatch.
+    """
+    to_process: list[str] = []
+    cached = 0
+    for video_id in video_ids:
+        try:
+            plan = plan_enrichment(session, video_id, kind)
+        except (KeyError, ValueError):
+            to_process.append(video_id)  # cannot gate → let the job attempt it
+            continue
+        if plan is None:
+            cached += 1
+        else:
+            to_process.append(video_id)
+    return to_process, cached
+
+
 def _no_comments_reason(video) -> str:
     """Say WHY there is nothing to synthesise — the UI renders this verbatim."""
     if video.comments_state == "disabled":

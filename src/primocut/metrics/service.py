@@ -17,8 +17,14 @@ from ..db import competitors as crepo
 from . import comments as mcomments
 from . import core
 from .attributes import SOURCE as ATTR_SOURCE
-from .enrichment import SOURCE_THUMBNAIL, SOURCE_TITLE
+from .enrichment import KIND_THUMBNAIL, KIND_TITLE, SOURCE_THUMBNAIL, SOURCE_TITLE
 from .patterns import conditional_patterns
+
+# The enrichment kinds whose result feeds `_patterns_for` — a comparison of two
+# groups (outliers vs. control). Both sides must be enriched or a proportion has
+# nothing to compare, so their batch target is every MATURE video, not just the
+# outliers. `comments` synthesises a single group and stays outliers-only.
+_PATTERN_KINDS = (KIND_TITLE, KIND_THUMBNAIL)
 
 # Every attribute source a dashboard reads. `syntactic` is always present (it is
 # deterministic and free); the two LLM ones exist only for videos the user chose
@@ -148,6 +154,13 @@ def _channel_scores(
 def _is_definitive_outlier(sc: _Scored) -> bool:
     """A mature (non-provisional, sufficient-baseline) video that reached a band."""
     return sc.score.status == "ok" and sc.score.band is not None
+
+
+def _is_mature(sc: _Scored) -> bool:
+    """A video with a real, settled score — the exact population `_patterns_for`
+    compares over: BOTH the banded outliers and the band-less control. Provisional
+    (< 7 days) and insufficient-sample videos are `status != "ok"` and stay out."""
+    return sc.score.status == "ok"
 
 
 def _outlier_payload(sc: _Scored, *, with_channel: bool = False, vph: float | None = None) -> dict:
@@ -523,47 +536,55 @@ def channel_dashboard(session, channel_id, *, settings=None, now=None) -> dict |
 # ------------------------- project-scoped selection -------------------------
 
 
-def definitive_outlier_ids_for_channel(
-    session, channel_id, *, settings=None, now=None
-) -> list[str]:
-    """The channel's definitive outliers.
-
-    Channel-scoped and therefore project-independent, which is what the snapshot
-    cycle needs: it iterates channels, and a channel's scores are the same in
-    every project that tracks it.
-    """
-    settings = settings or get_settings()
-    now = _now(now)
-    scored, _ = _channel_scores(session, channel_id, settings=settings, now=now)
-    return [
-        sc.video_id
-        for sc in scored.values()
-        if _is_definitive_outlier(sc)
-    ]
-
-
 def definitive_outlier_ids(session, project_id, *, settings=None, now=None) -> list[str] | None:
-    """The project's definitive outliers — the batch-enrichment target.
+    """The project's definitive outliers — the target for `comments` enrichment.
 
-    Deliberately the SAME set `_patterns_for` feeds to the distributions: paying an
-    LLM for a video the pattern math never reads would be waste, and a provisional
-    video (< 7 days) may still fall back to normal as its score matures — the
-    content-hash cache would not protect against that, since the score changes but
-    the thumbnail bytes do not. Returns None when the project does not exist.
+    A provisional video (< 7 days) may still fall back to normal as its score
+    matures, so only settled outliers are worth synthesising. Returns None when the
+    project does not exist.
+
+    NOTE: this is NOT the whole set `_patterns_for` reads. That comparison also
+    needs the band-less control, so `title`/`thumbnail` target every mature video
+    via `enrichment_target_ids` — see `_PATTERN_KINDS`.
     """
+    return _project_video_ids(
+        session, project_id, _is_definitive_outlier, settings=settings, now=now
+    )
+
+
+def mature_video_ids(session, project_id, *, settings=None, now=None) -> list[str] | None:
+    """Every mature video of the project — the population `_patterns_for` compares,
+    i.e. the banded outliers AND the band-less control together. Returns None when
+    the project does not exist."""
+    return _project_video_ids(
+        session, project_id, _is_mature, settings=settings, now=now
+    )
+
+
+def _project_video_ids(session, project_id, keep, *, settings, now) -> list[str] | None:
     settings = settings or get_settings()
     now = _now(now)
     if crepo.get_project(session, project_id) is None:
         return None
-
     out: list[str] = []
     for c in crepo.list_project_channels(session, project_id):
-        out.extend(
-            definitive_outlier_ids_for_channel(
-                session, c.channel_id, settings=settings, now=now
-            )
-        )
+        scored, _ = _channel_scores(session, c.channel_id, settings=settings, now=now)
+        out.extend(sc.video_id for sc in scored.values() if keep(sc))
     return out
+
+
+def enrichment_target_ids(
+    session, project_id, kind: str, *, settings=None, now=None
+) -> list[str] | None:
+    """The videos an opt-in enrichment of `kind` should cover, or None if the
+    project does not exist.
+
+    `title`/`thumbnail` feed the two-group pattern comparison, so BOTH sides must
+    carry the attribute — the target is every mature video. `comments` summarise a
+    single group, so they target only the definitive outliers.
+    """
+    select = mature_video_ids if kind in _PATTERN_KINDS else definitive_outlier_ids
+    return select(session, project_id, settings=settings, now=now)
 
 
 # ------------------------- project dashboard -------------------------
