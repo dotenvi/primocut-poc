@@ -89,7 +89,7 @@
         <span class="m text-ink-2">{s.label}</span>
         <div class="flex items-center gap-2.5">
           <span class="m text-ink-3 tabular-nums">{formatDuration(s.durationSec)}</span>
-          <span class="font-mono text-[10px] {st.wcls} w-[70px] text-right">{st.word}</span>
+          <span class="font-mono text-[11.5px] {st.wcls} w-[76px] text-right">{st.word}</span>
           <span
             class="inline-flex items-center justify-center w-4 h-4 rounded-full text-[9px] leading-none font-bold shrink-0 {st.ring}"
             title={st.word}
