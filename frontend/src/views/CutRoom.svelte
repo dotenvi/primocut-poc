@@ -2,23 +2,8 @@
   import { onMount, onDestroy } from 'svelte'
   import { api, isActive } from '../lib/api.js'
   import { href } from '../lib/router.js'
-  import { multiplier, compactNumber, formatDuration } from '../lib/format.js'
-  import { computeSteps } from '../lib/steps.js'
+  import { multiplier } from '../lib/format.js'
   import Player from '../components/Player.svelte'
-  import PipelineRail from '../components/PipelineRail.svelte'
-
-  // Per-state status chip for the log: a round icon (right-aligned) plus its
-  // word. Kept in lock-step with computeSteps' state vocabulary so the log and
-  // the rail never disagree. Order of the log itself is the canonical pipeline
-  // execution order (STEPS), not the raw transition history.
-  const STATUS = {
-    done:    { word: 'complete',   wcls: 'text-ok',    ring: 'bg-ok text-white',                           glyph: '✓' },
-    failed:  { word: 'failed',     wcls: 'text-err',   ring: 'bg-err text-white',                          glyph: '✕' },
-    running: { word: 'processing', wcls: 'text-accent',ring: 'bg-accent text-accent-on animate-pulse',     glyph: '' },
-    pending: { word: 'queued',     wcls: 'text-ink-3', ring: 'border border-line',                         glyph: '' },
-    empty:   { word: 'ignored',    wcls: 'text-ink-3', ring: 'bg-line-strong',                             glyph: '' },
-    skipped: { word: 'skipped',    wcls: 'text-ink-3', ring: 'border border-dashed border-line-strong text-ink-3', glyph: '/' },
-  }
 
   export let pid
   export let lid
@@ -36,12 +21,13 @@
   let timer
   let playerRef
   let selected = null // selected topic/peak key
+  let query = '' // transcript search filter
 
-  // Match the Topics card height to the player+pipeline column (so it bottom-
-  // aligns with the pipeline card, including when its log is open). Pure CSS
-  // can't do this: the always-long topics list would inflate the grid row and
-  // drive the height itself. Instead we measure the left column and, only in the
-  // 3-column layout, apply its height to the card; the list scrolls within.
+  // Match the Topics card height to the player+transcript column (so it bottom-
+  // aligns with the transcript card). Pure CSS can't do this: the always-long
+  // topics list would inflate the grid row and drive the height itself. Instead
+  // we measure the left column and, only in the 3-column layout, apply its
+  // height to the card; the list scrolls within.
   const THREE_COL = '(min-width: 1561px)'
   let matchHeight = null
   const mq = typeof window !== 'undefined' ? window.matchMedia(THREE_COL) : null
@@ -85,30 +71,15 @@
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  async function rerun() {
-    try { await api.reenqueue(pid, lid); await loadReport() } catch (e) { error = e.message }
-  }
-
   $: running = data ? isActive(data.video.status) : false
-  // The log, in canonical pipeline execution order (never raw history order),
-  // with each step's settled state + duration from the shared stage truth.
-  $: logSteps = data
-    ? computeSteps(
-        data.job ? data.job.stage : '',
-        data.video.status,
-        completed,
-        data.job ? data.job.stage_history : []
+
+  // The transcript, optionally narrowed by the search box (case-insensitive
+  // substring over the segment text). Each timestamp seeks the player.
+  $: segs = data
+    ? data.transcript.filter(
+        (s) => !query || s.text.toLowerCase().includes(query.toLowerCase())
       )
     : []
-  $: completed = data
-    ? {
-        metadata: !!data.video,
-        audio: data.transcript.length > 0,
-        transcription: data.transcript.length > 0,
-        chat: !!data.chat_signal,
-        topics: data.topics.length > 0,
-      }
-    : {}
 
   // Chat peaks join the topic list as first-class clip candidates, sorted with
   // the topics by their moment in the live.
@@ -182,43 +153,47 @@
     <!-- Below 1560px the player takes the full width on top and Topics /
          Packaging kit sit side by side beneath it; on wider screens all three
          are columns in one row. -->
-    <div class="max-[1560px]:col-span-2 max-[960px]:col-span-1" use:matchSource>
-      <div class="mb-3">
+    <div
+      class="max-[1560px]:col-span-2 max-[960px]:col-span-1 min-[1561px]:flex min-[1561px]:flex-col min-[1561px]:h-[calc(100vh-8.5rem)]"
+      use:matchSource
+    >
+      <div class="mb-3 min-[1561px]:shrink-0">
         <Player bind:this={playerRef} videoId={data.video.id} />
       </div>
 
-      <div class="card py-2.5">
-        <div class="flex items-center justify-between gap-3">
-          <div class="flex items-center gap-3">
-            <span class="lbl">Pipeline</span>
-            <PipelineRail
-              stage={data.job ? data.job.stage : ''}
-              status={data.video.status}
-              stageHistory={data.job ? data.job.stage_history : []}
-              {completed}
+      <!-- The full transcript (clickable timestamps → seek). In the 3-column
+           layout it fills the leftover viewport height so the whole column fits
+           on screen; the Topics / Packaging cards, pinned to it via
+           `matchHeight`, align to the same height. The list scrolls inside with
+           the custom scrollbar. -->
+      <div class="bg-card border border-line rounded-card overflow-hidden flex flex-col max-[1560px]:h-[440px] min-[1561px]:flex-1 min-[1561px]:min-h-0">
+        <div class="px-4 py-3 border-b border-line flex items-center gap-2 shrink-0">
+          <span class="lbl text-accent">Transcript</span>
+          {#if data.transcript.length}
+            <span class="tag bg-card2 text-ink-2 border-line-strong">{data.transcript.length}</span>
+            <input
+              class="ml-auto max-w-[220px] text-[12px] py-1"
+              type="text"
+              placeholder="search the transcript…"
+              bind:value={query}
             />
-          </div>
-          <div class="flex gap-1.5">
-            <button class="btn btn-xs" on:click={rerun}>Rerun stages</button>
-          </div>
-        </div>
-        <div class="mt-2.5 border-t border-line pt-2.5">
-          {#if data.warnings && data.warnings.length}
-            {#each data.warnings as w}<div class="m text-err mb-1.5">⚠ {w}</div>{/each}
           {/if}
-          {#each logSteps as s (s.key)}
-            {@const st = STATUS[s.state] || STATUS.pending}
-            <div class="flex items-center justify-between py-1.5 border-t border-line first:border-t-0">
-              <span class="m text-ink-2">{s.label}</span>
-              <div class="flex items-center gap-2.5">
-                <span class="m text-ink-3 tabular-nums">{formatDuration(s.durationSec)}</span>
-                <span class="font-mono text-[10px] {st.wcls} w-[70px] text-right">{st.word}</span>
-                <span
-                  class="inline-flex items-center justify-center w-4 h-4 rounded-full text-[9px] leading-none font-bold shrink-0 {st.ring}"
-                  title={st.word}
-                >{st.glyph}</span>
-              </div>
-            </div>
+        </div>
+        <div class="px-4 py-3 flex-1 overflow-y-auto min-h-0 {SCROLL}">
+          {#if data.transcript.length === 0}
+            <p class="m">{running ? 'Processing — the transcript appears as the pipeline finishes.' : 'No transcript for this live.'}</p>
+          {:else if segs.length === 0}
+            <p class="m">No segment matches “{query}”.</p>
+          {/if}
+          {#each segs as s (s.index)}
+            <p class="text-[13px] leading-relaxed mb-1.5">
+              <button
+                type="button"
+                class="font-mono text-[11px] text-accent hover:text-accent-hi cursor-pointer align-baseline mr-1"
+                on:click={() => seekTo(s.start, s.youtube_url)}
+              >{s.start_hms}</button>
+              <span class="text-ink-2">{s.text}</span>
+            </p>
           {/each}
         </div>
       </div>
@@ -226,7 +201,7 @@
 
     <!-- Beside the player: the clip candidates (topics + chat peaks). Its height
          is pinned to the left column (`matchHeight`) so it bottom-aligns with the
-         pipeline card; the list scrolls inside with the custom scrollbar. When
+         transcript card; the list scrolls inside with the custom scrollbar. When
          stacked (matchHeight null) it falls back to the viewport cap below. -->
     <div
       class="bg-card border border-line rounded-card overflow-hidden flex flex-col max-h-[calc(100vh-2.5rem)]"

@@ -22,8 +22,11 @@
   // Width policy: the canvas is generous by default so large screens are used;
   // only reading/table-oriented views opt back into the comfortable measure
   // (long lines of prose or wide tables read worse when they sprawl).
+  // Lives is not listed here: it keeps its own comfortable measure while the
+  // pipeline panel is closed, but widens to use the canvas when it opens (so the
+  // table and the panel fit on one line) — that decision lives in Lives.svelte.
   const READING_VIEWS = new Set([
-    'radar', 'activity', 'lives', 'niche', 'video', 'channel', 'settings',
+    'radar', 'activity', 'niche', 'video', 'channel', 'settings',
   ])
   $: contentWidth = READING_VIEWS.has(route.view) ? 'max-w-[1160px]' : 'max-w-[1680px]'
 </script>
