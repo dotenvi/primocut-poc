@@ -10,6 +10,112 @@ unstable: breaking changes may land in any minor release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-19
+
+A niche-first rebuild: the interface is reorganised around global events and
+per-project patterns, the outlier metric moves from fixed multiples to
+per-channel percentile bands, and an append-only event log powers a cross-project
+Radar. Several web-API, config and metrics surfaces change or disappear — see
+Changed and Removed. In 0.x these breaking changes ship in a minor by policy.
+
+### Added
+
+- **A new navigation architecture: events are global, patterns are per project.**
+  **Radar** (a cross-project feed of what happened in the niches, with a "Needs
+  you" band, a per-project filter and mark-as-seen) and **Activity** (the system
+  log) now sit above the projects; each project contains **Lives**, **Niche** and
+  **Settings**. Selecting a project is a route, not a dropdown, and every
+  destination is a linkable hash URL with working back/forward.
+- **An append-only event log, surfaced as Radar and Activity.** The snapshot
+  cycle emits `outlier_crossed`, packaging-change and cycle events into an
+  append-only `events` table guarded against flapping by a per-video band memory
+  (`last_band_emitted`); the Radar renders them as alerts, the Activity feed lists
+  them, and each carries a seen state. Comment collection is now driven by
+  `outlier_crossed` events rather than a scan.
+- **Cut room — the bridge between the two halves of the product.** A live's page
+  pairs the player and a pipeline stage rail with a **Packaging kit** fed by the
+  niche's own patterns (attributes with real lift, reference outliers, the
+  audience's explicit requests), and chat peaks now join the topic list as
+  first-class clip candidates.
+- **Lives live inside a project, and a niche can track your own channels** —
+  `primocut lives add/list` operate within a project, own channels sit alongside
+  the competitors, and a project is redefined as a niche.
+- **"Channel spread" distribution strip**, one render shared by the Radar cards
+  and the competitor video detail, backed by a single new endpoint
+  `GET /api/channels/{cid}/distribution?format=` (one call per page) and its batch
+  form `GET /api/channels/distribution?channel_ids=&format=` (one call per Radar
+  page — bounded by channels, never an N+1 or a snapshot scan).
+- **The niche enrich buttons show the cost before the click** ("Enrich titles ·
+  268 new"), backed by `GET /api/projects/{pid}/enrich/preview?kind=`, which
+  reports how many videos are new versus already cached.
+- **Tailwind CSS build** (Manrope + DM Mono); the design tokens are ported
+  verbatim from the approved prototype.
+- **Competitor thumbnails render in the Radar feed**, with a backfill that fills
+  the thumbnail URL on legacy rows.
+- `GET /api/projects` now carries `live_count`; `GET /api/projects/{pid}` carries
+  a read-only `band_config`; the event feed resolves each event's `title` and
+  `channel_title` on read, so a Radar card names the video and channel without the
+  payload having to store them.
+
+### Changed
+
+- **Outliers are classified by per-channel, per-format percentile bands, and
+  patterns are guarded by a Wilson interval.** The fixed 3x/6x/10x classifier is
+  replaced by the channel's own p90/p97/p99 (nearest-rank, over the same rolling
+  window as the median) mapped to relevant/strong/exceptional, so ~10% of a
+  channel lands in the tail instead of ~30%. The median multiple is still computed
+  and shown ("20.6x") but no longer classifies. Patterns now compare the banded
+  outliers against a band-less mature control and display only when the two 95%
+  Wilson intervals do not overlap (positive pattern or anti-pattern); there is no
+  minimum-occurrence floor — the interval self-regulates.
+  **BREAKING (Web API)** — `OutlierScore`/payload fields are renamed
+  (`score`→`median_multiple`, `bracket`→`band` with `band_basis`/`percentile`/
+  `band_cutoffs`), the status `insufficient_data`→`insufficient_sample`, and the
+  pattern payload now carries `freq_outlier`/`ci_outlier`/`freq_control`/
+  `ci_control`/`n_outlier`/`n_control`/`verdict`.
+- **The dashboards never blend Shorts with long-form.** Shorts and long-form
+  monetise differently, target different audiences and are different formats, so a
+  figure computed across both describes neither. Engagement medians and the
+  outlier, pattern and resurgence populations are now each split by format, and
+  the UI picks one with a Long-form/Shorts tab. Patterns clear the
+  minimum-occurrence guard per format, so a thin format reports nothing rather
+  than borrowing the other's support.
+  **BREAKING (Web API)** — in `GET /api/channels/{cid}/dashboard`, `engagement`,
+  `outliers` and `resurgences` are now objects keyed `"long"`/`"short"` instead of
+  a flat object/list; in `GET /api/projects/{pid}/dashboard`, the same applies to
+  `outliers`, `patterns` and `resurgences`.
+- **"Competitors" is renamed "Niche"** (tabs Patterns/Outliers/Channels),
+  "Submit" becomes a **+ New live** button inside Lives, and the per-channel
+  dashboard is now a drill-down of Niche › Channels rather than a top-level
+  destination.
+- **The `title`/`thumbnail` enrichment batch now targets every mature video** —
+  both sides the pattern comparison reads — via `service.enrichment_target_ids`;
+  provisional and insufficient-sample videos still stay out. `comments` continue
+  to target only the definitive outliers. `POST /api/projects/{pid}/enrich` now
+  returns `{kind, new, cached, total, rq_job_id}` and dispatches only the cache
+  misses.
+- **The workspace UI is refined** — a wider canvas that keeps reading views
+  comfortable, a paginated Radar feed with per-section pagers, the Cut room's
+  pipeline log beside the player, a fixed sidebar/footer with a working chevron
+  toggle, and larger per-stage status text.
+
+### Deprecated
+
+- **The fixed-multiple outlier basis is demoted to a legacy `band_basis`.**
+  Percentile bands are the default; the fixed multiples remain available only as a
+  configured legacy basis and no longer classify on their own.
+
+### Removed
+
+- **The top-level `/api/videos*` surface is removed** — the frontend and clients
+  now target the project-scoped lives endpoints `/api/projects/{pid}/lives/...`.
+  **BREAKING (Web API).**
+- **The settings `outlier_brackets`, `pattern_min_occurrence` and
+  `pattern_outlier_bracket` are removed**, superseded by the percentile-band
+  configuration (`band_basis`, `band_cutoffs_*`). **BREAKING (config).**
+- **The project dropdown** (the project now lives in the URL), the **hand-rolled
+  stylesheet** and the **Tailwind Play CDN** are gone.
+
 ### Fixed
 
 - **Niche › Patterns (and the Cut Room Packaging kit it feeds) no longer stay
@@ -18,78 +124,15 @@ unstable: breaking changes may land in any minor release.
   targeted the outliers, so `title_llm`/`thumbnail_llm` had a control of N=0 and
   every Wilson comparison had nothing to separate. `syntactic` was unaffected
   because the snapshot cycle fills it for the whole population.
-
-### Changed
-
-- **The `title`/`thumbnail` enrichment batch now targets every mature video** —
-  both sides the pattern comparison reads — via `service.enrichment_target_ids`;
-  provisional and insufficient-sample videos still stay out. `comments` continue
-  to target only the definitive outliers (a synthesis summarises one group rather
-  than comparing two). `POST /api/projects/{pid}/enrich` now returns
-  `{kind, new, cached, total, rq_job_id}` and dispatches only the cache misses.
-
-### Added
-
-- **The niche enrich buttons show the cost before the click** ("Enrich titles ·
-  268 new"), backed by `GET /api/projects/{pid}/enrich/preview?kind=`, which reports
-  how many videos are new versus already cached.
-
-## [0.3.0] - 2026-07-18
-
-### Added
-
-- **A new navigation architecture: events are global, patterns are per project.**
-  **Radar** (a cross-project feed of what happened in the niches) and **Activity**
-  (the system log) now sit above the projects; each project contains **Lives**,
-  **Niche** and **Settings**. Selecting a project is a route, not a dropdown, and
-  every destination is a linkable hash URL with working back/forward.
-- **Cut room — the bridge between the two halves of the product.** A live's page
-  gains a **Packaging kit** panel fed by the niche's own patterns (attributes with
-  real lift, reference outliers, the audience's explicit requests), and chat peaks
-  now join the topic list as first-class clip candidates.
-- **"Channel spread" distribution strip**, one render shared by the Radar cards and
-  the competitor video detail, backed by a single new endpoint
-  `GET /api/channels/{cid}/distribution?format=` (one call per page) and its batch
-  form `GET /api/channels/distribution?channel_ids=&format=` (one call per Radar
-  page — bounded by channels, never an N+1 or a snapshot scan).
-- **Tailwind CSS build** (Manrope + DM Mono) replaces the hand-rolled stylesheet and
-  the Play CDN; the design tokens are ported verbatim from the approved prototype.
-- `GET /api/projects` now carries `live_count`; `GET /api/projects/{pid}` carries a
-  read-only `band_config`; the event feed resolves each event's `title` and
-  `channel_title` on read, so a Radar card names the video and channel without the
-  payload having to store them.
-
-### Changed
-
-- **"Competitors" is renamed "Niche"**, "Submit" becomes a **+ New live** button
-  inside Lives, and the per-channel dashboard is now a drill-down of Niche ›
-  Channels rather than a top-level destination.
-
-- **The dashboards never blend Shorts with long-form** — Shorts and long-form
-  monetise differently, target different audiences and are different formats, so
-  a figure computed across both describes neither. The outlier score already used
-  per-format baselines, but the **engagement medians were computed over every
-  video mixed**, and the outlier/pattern/resurgence populations were reported as
-  one list. Every one of them is now split by format, and the UI picks one with a
-  Long-form/Shorts tab.
-- **BREAKING (Web API)** — in `GET /api/channels/{cid}/dashboard`, `engagement`,
-  `outliers` and `resurgences` are now objects keyed `"long"`/`"short"` instead of
-  a flat object/list; in `GET /api/projects/{pid}/dashboard`, the same applies to
-  `outliers`, `patterns` and `resurgences`.
-- **Patterns clear the minimum-occurrence guard per format**, so a format with too
-  few definitive outliers now reports no pattern instead of borrowing the other
-  format's support.
-
-### Fixed
-
 - **Shorts longer than 60s are no longer classified as long-form** — the
   `is_short` duration heuristic capped at 60 seconds, but YouTube has allowed
   Shorts of up to 3 minutes since October 2024, so every Short in the 61-180s
   range was counted as long-form — shrinking the Shorts baseline sample and
-  polluting the long-form one. `PRIMOCUT_YOUTUBE_SHORT_MAX_SECONDS` now
-  defaults to `180`.
-  Channels backfilled before this lands keep their old `is_short` values until
-  they are re-collected (the flag is written at collection time).
+  polluting the long-form one. `PRIMOCUT_YOUTUBE_SHORT_MAX_SECONDS` now defaults
+  to `180`. Channels backfilled before this lands keep their old `is_short` values
+  until they are re-collected (the flag is written at collection time).
+- **Legacy databases missing `competitor_videos.last_band_emitted` are migrated**
+  so the anti-flapping band guard works on pre-existing rows.
 
 ## [0.2.1] - 2026-07-15
 
@@ -201,7 +244,8 @@ architecture (CLI, worker, jobs, web API and web UI).
   and job timeout.
 - **Resilience** — retry with backoff and transient-error classification.
 
-[Unreleased]: https://github.com/dotenvi/primocut/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/dotenvi/primocut/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/dotenvi/primocut/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/dotenvi/primocut/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/dotenvi/primocut/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/dotenvi/primocut/releases/tag/v0.1.0
