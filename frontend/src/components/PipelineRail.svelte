@@ -42,7 +42,7 @@
     {/each}
   </div>
   {#if word}
-    <span class="font-mono text-[10px] {word.cls}">
+    <span class="font-mono text-[11.5px] {word.cls}">
       {word.text}{overall === 'done' ? ` · ${done}/${steps.length}` : ''}
     </span>
   {/if}
