@@ -10,6 +10,30 @@ unstable: breaking changes may land in any minor release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Niche › Patterns (and the Cut Room Packaging kit it feeds) no longer stay
+  blank for the LLM sources.** The conditional distributions compare two groups —
+  the banded outliers against a band-less control — but the enrichment batch only
+  targeted the outliers, so `title_llm`/`thumbnail_llm` had a control of N=0 and
+  every Wilson comparison had nothing to separate. `syntactic` was unaffected
+  because the snapshot cycle fills it for the whole population.
+
+### Changed
+
+- **The `title`/`thumbnail` enrichment batch now targets every mature video** —
+  both sides the pattern comparison reads — via `service.enrichment_target_ids`;
+  provisional and insufficient-sample videos still stay out. `comments` continue
+  to target only the definitive outliers (a synthesis summarises one group rather
+  than comparing two). `POST /api/projects/{pid}/enrich` now returns
+  `{kind, new, cached, total, rq_job_id}` and dispatches only the cache misses.
+
+### Added
+
+- **The niche enrich buttons show the cost before the click** ("Enrich titles ·
+  268 new"), backed by `GET /api/projects/{pid}/enrich/preview?kind=`, which reports
+  how many videos are new versus already cached.
+
 ## [0.3.0] - 2026-07-18
 
 ### Added
