@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ..db import competitors as crepo
@@ -200,6 +200,32 @@ def build_projects_router(
             raise HTTPException(status_code=404, detail="project not found")
         return data
 
+    @router.get("/projects/{project_id}/enrich/preview")
+    def enrich_project_preview(
+        project_id: int,
+        kind: str = Query(..., description="thumbnail | title | comments"),
+        db=Depends(get_db),
+        settings=Depends(get_settings_dep),
+    ) -> dict:
+        """How many videos an enrich of `kind` would newly process versus already
+        have cached, so the button can show the cost before the click. Pure read."""
+        from ..metrics import enrichment
+        from ..metrics import service as metrics_service
+
+        try:
+            enrichment.validate_kind(kind)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        with db.session() as s:
+            video_ids = metrics_service.enrichment_target_ids(
+                s, project_id, kind, settings=settings
+            )
+            if video_ids is None:
+                raise HTTPException(status_code=404, detail="project not found")
+            to_process, cached = enrichment.enrichment_plan_counts(s, video_ids, kind)
+        return {"kind": kind, "new": len(to_process), "cached": cached,
+                "total": len(video_ids)}
+
     @router.post("/projects/{project_id}/enrich", status_code=202)
     def enrich_project_outliers(
         project_id: int,
@@ -208,25 +234,37 @@ def build_projects_router(
         queue=Depends(get_queue_dep),
         settings=Depends(get_settings_dep),
     ) -> dict:
-        """Enrich this project's definitive outliers with an LLM — their packaging
-        or, for kind="comments", the synthesis of the comments already collected.
-        Opt-in: costs money, so it runs only from this explicit action
-        (guideline 9). Selection is a pure read; the work goes to the queue."""
+        """Enrich this project with an LLM. `title`/`thumbnail` cover every mature
+        video (both sides the pattern comparison reads); `comments` synthesise the
+        definitive outliers' collected comments. Opt-in: costs money, so it runs
+        only from this explicit action (guideline 9). Only the cache misses are
+        dispatched — an unchanged content hash never recharges. Selection is a pure
+        read; the work goes to the queue."""
+        from ..metrics import enrichment
         from ..metrics import service as metrics_service
         from ..worker.queue import enqueue_enrichment
 
-        with db.session() as s:
-            video_ids = metrics_service.definitive_outlier_ids(
-                s, project_id, settings=settings
-            )
-        if video_ids is None:
-            raise HTTPException(status_code=404, detail="project not found")
         try:
-            return enqueue_enrichment(
-                video_ids, body.kind, settings=settings, queue=queue
-            )
+            enrichment.validate_kind(body.kind)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+
+        with db.session() as s:
+            video_ids = metrics_service.enrichment_target_ids(
+                s, project_id, body.kind, settings=settings
+            )
+            if video_ids is None:
+                raise HTTPException(status_code=404, detail="project not found")
+            to_process, cached = enrichment.enrichment_plan_counts(s, video_ids, body.kind)
+
+        result = {"kind": body.kind, "new": len(to_process), "cached": cached,
+                  "total": len(video_ids), "rq_job_id": None}
+        if to_process:
+            enqueued = enqueue_enrichment(
+                to_process, body.kind, settings=settings, queue=queue,
+            )
+            result["rq_job_id"] = enqueued["rq_job_id"]
+        return result
 
     @router.get("/projects/{project_id}/own-channels")
     def list_own_channels(project_id: int, db=Depends(get_db)) -> list[dict]:

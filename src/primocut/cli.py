@@ -497,9 +497,10 @@ def metrics_enrich(
     """Enrich a video with an LLM (opt-in — this COSTS money).
 
     `thumbnail`/`title` analyse the packaging; `comments` synthesises the comments
-    the snapshot cycle already collected. Runs inline (no worker needed) over a
-    project's definitive outliers, or over a single video. Videos whose content
-    hash is unchanged are skipped for free.
+    the snapshot cycle already collected. Runs inline (no worker needed). Over a
+    project, `thumbnail`/`title` cover every mature video (both sides the pattern
+    comparison reads) while `comments` covers only the definitive outliers; or pass
+    a single video. Videos whose content hash is unchanged are skipped for free.
     """
     setup_logging()
     from .db import get_database
@@ -517,7 +518,7 @@ def metrics_enrich(
         video_ids = [video]
     else:
         with database.session() as s:
-            video_ids = service.definitive_outlier_ids(s, project, settings=settings)
+            video_ids = service.enrichment_target_ids(s, project, kind, settings=settings)
         if video_ids is None:
             console.print(f"[red]Project {project} not found.[/red]")
             raise typer.Exit(code=1)
