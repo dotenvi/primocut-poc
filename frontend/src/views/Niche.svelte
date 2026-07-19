@@ -16,9 +16,19 @@
   let url = ''
   let busy = false
   let timer
+  let preview = { thumbnail: null, title: null } // { new, cached, total } per kind
 
   async function loadDash() {
     try { dash = await api.projectDashboard(pid); error = '' } catch (e) { error = e.message }
+  }
+  async function loadPreview() {
+    try {
+      const [thumbnail, title] = await Promise.all([
+        api.enrichPreview(pid, 'thumbnail'),
+        api.enrichPreview(pid, 'title'),
+      ])
+      preview = { thumbnail, title }
+    } catch (_) { /* labels just stay plain */ }
   }
   async function loadChannels() {
     try { channels = await api.channels(pid) } catch (e) { error = e.message }
@@ -34,19 +44,27 @@
     loadProject()
     loadDash()
     loadChannels()
+    loadPreview()
     timer = setInterval(() => { if (channelsPending()) loadChannels() }, 2000)
   })
   onDestroy(() => clearInterval(timer))
 
   const go = (t) => goto(href.niche(pid, t))
 
+  // Label the button with the cost before the click, e.g. "Enrich titles · 268 new".
+  const enrichLabel = (base, p) =>
+    p && p.new ? `${base} · ${p.new} new` : p && p.total ? `${base} · all cached` : base
+
   async function enrich(kind) {
     notice = ''
     try {
       const r = await api.enrichProject(pid, kind)
-      notice = r.videos
-        ? `Enriching the ${kind} of ${r.videos} outlier${r.videos === 1 ? '' : 's'} — open a video to follow it.`
-        : 'No definitive outlier to enrich yet.'
+      notice = r.new
+        ? `Enriching the ${kind} of ${r.new} video${r.new === 1 ? '' : 's'} (${r.cached} already cached) — open a video to follow it.`
+        : r.total
+          ? `All ${r.total} mature videos already enriched — nothing to do.`
+          : 'No mature video to enrich yet.'
+      loadPreview()
     } catch (e) { error = e.message }
   }
 
@@ -80,8 +98,8 @@
   <div><div class="eyebrow">{project?.name || '…'}</div><h1>Niche</h1></div>
   {#if tab === 'patterns'}
     <div class="flex gap-1.5">
-      <button class="btn btn-ai" on:click={() => enrich('thumbnail')}>Enrich thumbnails</button>
-      <button class="btn btn-ai" on:click={() => enrich('title')}>Enrich titles</button>
+      <button class="btn btn-ai" on:click={() => enrich('thumbnail')}>{enrichLabel('Enrich thumbnails', preview.thumbnail)}</button>
+      <button class="btn btn-ai" on:click={() => enrich('title')}>{enrichLabel('Enrich titles', preview.title)}</button>
     </div>
   {/if}
 </div>

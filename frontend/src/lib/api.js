@@ -74,6 +74,9 @@ export const api = {
   enrichVideo: (cid, vid, kind, regenerate = false) =>
     req('POST', `/channels/${cid}/videos/${vid}/enrich`, { kind, regenerate }),
   enrichProject: (pid, kind) => req('POST', `/projects/${pid}/enrich`, { kind }),
+  // How many videos an enrich would newly process vs. already cached, so the
+  // button shows the cost before the click.
+  enrichPreview: (pid, kind) => req('GET', `/projects/${pid}/enrich/preview${qs({ kind })}`),
 }
 
 // Public YouTube watch URL (built client-side; the metrics payload carries only the id).
