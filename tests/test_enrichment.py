@@ -363,26 +363,95 @@ def test_video_enrich_endpoint_404_and_400(tmp_path):
                        json={"kind": "nonsense"}).status_code == 400
 
 
-def test_project_enrich_endpoint_targets_definitive_outliers_only(tmp_path):
-    db = _db(tmp_path)
+def _outlier_fixture(db):
+    """A channel with 12 mature control videos, one mature outlier and one young
+    (provisional) outlier, linked to a fresh project. Returns the project id."""
     # A baseline of 12 videos at 1000 views holds the median at 1000.
     for i in range(12):
         _video(db, "UCc", f"base{i}", views=1000, days_ago=20 + i)
-    _video(db, "UCc", "definitive", views=10_000, days_ago=25)   # 10x, mature → target
-    _video(db, "UCc", "provisional", views=10_000, days_ago=2)   # 10x but < 7 days → skip
+    _video(db, "UCc", "definitive", views=10_000, days_ago=25)   # 10x, mature → outlier
+    _video(db, "UCc", "provisional", views=10_000, days_ago=2)   # 10x but < 7 days → out
     with db.session() as s:
         proj = crepo.create_project(s, "P")
         crepo.link_channel(s, proj.id, "UCc")
-        pid = proj.id
+        return proj.id
+
+
+# The 12 control + 1 outlier are mature; the young outlier is censored.
+MATURE_IDS = {f"base{i}" for i in range(12)} | {"definitive"}
+
+
+def test_project_enrich_title_thumbnail_target_every_mature_video(tmp_path):
+    # title/thumbnail feed the two-group pattern comparison, so BOTH the outlier
+    # and the band-less control must be enriched — the whole mature population.
+    db = _db(tmp_path)
+    pid = _outlier_fixture(db)
     queue = FakeQueue()
 
     r = _client(db, queue).post(f"/api/projects/{pid}/enrich", json={"kind": "thumbnail"})
 
     assert r.status_code == 202
     video_ids, kind = queue.calls[0][1]
-    assert set(video_ids) == {"definitive"}
+    assert set(video_ids) == MATURE_IDS       # control + outlier, provisional excluded
     assert kind == "thumbnail"
-    assert r.json()["videos"] == 1
+    body = r.json()
+    assert body["new"] == 13 and body["cached"] == 0 and body["total"] == 13
+
+
+def test_project_enrich_comments_target_definitive_outliers_only(tmp_path):
+    # A synthesis summarises one group; it never compares two, so the control has
+    # no place here — comments stay outliers-only.
+    db = _db(tmp_path)
+    pid = _outlier_fixture(db)
+    queue = FakeQueue()
+
+    r = _client(db, queue).post(f"/api/projects/{pid}/enrich", json={"kind": "comments"})
+
+    assert r.status_code == 202
+    video_ids, kind = queue.calls[0][1]
+    assert set(video_ids) == {"definitive"} and kind == "comments"
+
+
+def test_project_enrich_preview_and_dispatch_skip_the_cached(tmp_path):
+    # Cache one video's thumbnail (content hash unchanged), then the preview counts
+    # it as cached and the POST dispatches only the remaining misses.
+    db = _db(tmp_path)
+    pid = _outlier_fixture(db)
+    with db.session() as s:
+        crepo.upsert_video_attributes(
+            s, video_id="base0", source=enrichment.SOURCE_THUMBNAIL,
+            attributes={"thumb_has_face": True}, content_hash="abc123",  # == _video thumb_hash
+            state="done",
+        )
+    client = _client(db, FakeQueue())
+
+    preview = client.get(f"/api/projects/{pid}/enrich/preview", params={"kind": "thumbnail"})
+    assert preview.json() == {"kind": "thumbnail", "new": 12, "cached": 1, "total": 13}
+
+    queue = FakeQueue()
+    r = _client(db, queue).post(f"/api/projects/{pid}/enrich", json={"kind": "thumbnail"})
+    dispatched, _ = queue.calls[0][1]
+    assert set(dispatched) == MATURE_IDS - {"base0"}   # the cached one is not re-sent
+    assert r.json()["new"] == 12 and r.json()["cached"] == 1
+
+
+def test_project_enrich_all_cached_dispatches_nothing(tmp_path):
+    db = _db(tmp_path)
+    pid = _outlier_fixture(db)
+    with db.session() as s:
+        for vid in MATURE_IDS:
+            crepo.upsert_video_attributes(
+                s, video_id=vid, source=enrichment.SOURCE_TITLE,
+                attributes={"title_tone_hype": True},
+                content_hash=enrichment.title_content_hash("A title"), state="done",
+            )
+    queue = FakeQueue()
+
+    r = _client(db, queue).post(f"/api/projects/{pid}/enrich", json={"kind": "title"})
+
+    assert queue.calls == []                    # nothing to do → no job enqueued
+    body = r.json()
+    assert body["new"] == 0 and body["cached"] == 13 and body["rq_job_id"] is None
 
 
 def test_project_enrich_endpoint_404(tmp_path):

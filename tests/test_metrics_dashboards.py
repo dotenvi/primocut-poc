@@ -16,6 +16,7 @@ from primocut.db import competitors as crepo
 from primocut.db.session import Database
 from primocut.metrics import service
 from primocut.metrics.attributes import refresh_syntactic_attributes
+from primocut.metrics.enrichment import SOURCE_TITLE
 
 NOW = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)
 # The uniform synthetic fixtures below (all peers at one view count + a viral) are
@@ -331,6 +332,48 @@ def test_provisional_video_is_censored_from_control(tmp_path):
     # Control counts only the 15 mature plain videos — the provisional "?" is out.
     assert q["n_outlier"] == 15 and q["n_control"] == 15
     assert q["freq_control"] == 0.0 and q["verdict"] == "positive"
+
+
+def test_llm_patterns_appear_once_both_sides_are_enriched(tmp_path):
+    # The whole point of enriching the mature population and not just the outliers:
+    # a title attribute present in 80% of outliers and 30% of control can only
+    # separate when BOTH groups carry the title_llm source. Enriching outliers
+    # alone leaves the control at N=0 and the comparison with nothing to compare.
+    db = _db(tmp_path)
+    _channel(db, "UCc")
+    outliers = [f"out{i}" for i in range(20)]
+    control = [f"ctl{i}" for i in range(40)]
+    hook = set(outliers[:16]) | set(control[:12])  # 80% of outliers, 30% of control
+
+    for i, vid in enumerate(outliers):  # 4x the median → banded
+        _video(db, "UCc", vid, views=4000, days_ago=20 + i,
+               title=(f"Really? {vid}" if vid in hook else f"plain {vid}"))
+    for i, vid in enumerate(control):   # at the median → band-less control
+        _video(db, "UCc", vid, views=1000, days_ago=20 + i,
+               title=(f"Really? {vid}" if vid in hook else f"plain {vid}"))
+
+    all_ids = outliers + control
+    with db.session() as s:
+        refresh_syntactic_attributes(s, all_ids)
+        for vid in all_ids:  # enrich BOTH sides with a title_llm attribute
+            crepo.upsert_video_attributes(
+                s, video_id=vid, source=SOURCE_TITLE,
+                attributes={"title_hook": vid in hook}, content_hash=f"h-{vid}",
+            )
+        proj = crepo.create_project(s, "P")
+        crepo.link_channel(s, proj.id, "UCc")
+        pid = proj.id
+
+    with db.session() as s:
+        dash = service.project_dashboard(s, pid, settings=FIXED_BIG, now=NOW)
+
+    long = dash["patterns"]["long"]
+    planted = next(p for p in long if p["attribute"] == "title_hook")
+    assert planted["source"] == "title_llm"
+    assert planted["n_outlier"] == 20 and planted["n_control"] == 40  # control is NOT 0
+    assert planted["verdict"] == "positive" and planted["lift"] > 1
+    # syntactic separates the same split, untouched — the deterministic source still works.
+    assert any(p["attribute"] == "has_question" and p["source"] == "syntactic" for p in long)
 
 
 # ------------------------- channel spread distribution -------------------------
