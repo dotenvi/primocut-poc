@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..config import Settings, get_settings
 from ..download.audio import extract_video_id, validate_youtube_url
 from ..logging_conf import get_logger
@@ -59,6 +61,248 @@ def enqueue_enrichment(
     logger.info("Enqueued %s enrichment of %d video(s) (rq %s)",
                 kind, len(video_ids), rq_job.id)
     return {"kind": kind, "videos": len(video_ids), "rq_job_id": rq_job.id}
+
+
+def enqueue_render(
+    video_id: str,
+    cut_id: int,
+    *,
+    item_ids: list[int] | None = None,
+    regenerate: bool = False,
+    fast_copy: bool = False,
+    settings: Settings | None = None,
+    database=None,
+    queue=None,
+) -> dict:
+    """Enqueue a BACKGROUND render of a cut's items (all, or the given subset).
+
+    The worker owns the clip rows (per-item isolation + the pay-once cache): this
+    only validates the cut, resolves the item list and enqueues one job. Rendering
+    runs off the request thread so the user can keep triaging. Raises `KeyError`
+    if the cut does not exist in the live (the route maps it to 404).
+    """
+    settings = settings or get_settings()
+    if database is None:
+        from ..db import get_database
+
+        database = get_database(settings)
+
+    from ..db import cuts as cuts_repo
+
+    with database.session() as s:
+        cut = cuts_repo.get_cut(s, video_id, cut_id)
+        if cut is None:
+            raise KeyError((video_id, cut_id))
+        items = cuts_repo.list_items(s, cut_id)
+        if item_ids is not None:
+            wanted = set(item_ids)
+            items = [it for it in items if it.id in wanted]
+        ids = [it.id for it in items]
+
+    if not ids:
+        return {"cut_id": cut_id, "queued": 0, "rq_job_id": None}
+
+    from .render_jobs import render_clips
+
+    q = queue if queue is not None else get_queue(settings)
+    rq_job = q.enqueue(
+        render_clips, video_id, cut_id, ids,
+        regenerate=regenerate, fast_copy=fast_copy,
+        job_timeout=settings.rq_job_timeout,
+    )
+    logger.info("Enqueued render of %d clip(s) for cut %s (rq %s)",
+                len(ids), cut_id, rq_job.id)
+    return {"cut_id": cut_id, "queued": len(ids), "rq_job_id": rq_job.id}
+
+
+def enqueue_export(
+    video_id: str,
+    cut_id: int,
+    *,
+    render_missing: bool = False,
+    skip_master: bool = False,
+    upscale_1440p: bool = False,
+    settings: Settings | None = None,
+    database=None,
+    queue=None,
+) -> dict:
+    """Enqueue a BACKGROUND export of a cut into a deliverable bundle.
+
+    Sets the export row to `queued` right away so the UI shows a live state, then
+    enqueues the packaging job. Raises `KeyError` if the cut does not exist in the
+    live (the route maps it to 404). The zip is always produced for the UI download.
+    """
+    settings = settings or get_settings()
+    if database is None:
+        from ..db import get_database
+
+        database = get_database(settings)
+
+    from ..db import cuts as cuts_repo
+    from ..db import exports as exports_repo
+
+    with database.session() as s:
+        cut = cuts_repo.get_cut(s, video_id, cut_id)
+        if cut is None:
+            raise KeyError((video_id, cut_id))
+        item_count = len(cuts_repo.list_items(s, cut_id))
+        exports_repo.reset_to_queued(
+            s, video_id=video_id, cut_id=cut_id, item_count=item_count,
+            skip_master=skip_master, upscaled=upscale_1440p,
+        )
+
+    from .export_jobs import export_cut
+
+    q = queue if queue is not None else get_queue(settings)
+    rq_job = q.enqueue(
+        export_cut, video_id, cut_id,
+        render_missing=render_missing, skip_master=skip_master,
+        upscale_1440p=upscale_1440p, make_zip=True,
+        job_timeout=settings.rq_job_timeout,
+    )
+    logger.info("Enqueued export of cut %s (rq %s)", cut_id, rq_job.id)
+    return {"cut_id": cut_id, "queued": item_count, "rq_job_id": rq_job.id}
+
+
+def _cut_or_raise(database, video_id: str, cut_id: int) -> int:
+    """Resolve the cut in the live (raises KeyError → the route maps it to 404)."""
+    from ..db import cuts as cuts_repo
+
+    with database.session() as s:
+        cut = cuts_repo.get_cut(s, video_id, cut_id)
+        if cut is None:
+            raise KeyError((video_id, cut_id))
+        return len(cuts_repo.list_items(s, cut_id))
+
+
+def enqueue_packaging(
+    video_id: str,
+    cut_id: int,
+    kind: str,
+    *,
+    item_ids: list[int] | None = None,
+    k: int | None = None,
+    regenerate: bool = False,
+    settings: Settings | None = None,
+    database=None,
+    queue=None,
+) -> dict:
+    """Enqueue a BACKGROUND per-clip packaging generation (`title`/`thumb_brief`).
+
+    Opt-in and costs an LLM call (guideline 9). Runs off the request thread so the
+    user keeps triaging; each clip is polled via the bench."""
+    settings = settings or get_settings()
+    if database is None:
+        from ..db import get_database
+
+        database = get_database(settings)
+    if kind not in ("title", "thumb_brief"):
+        raise ValueError(f"unknown packaging kind: {kind!r} (use 'title' or 'thumb_brief')")
+    _cut_or_raise(database, video_id, cut_id)
+
+    from .packaging_jobs import generate_cut_packaging
+
+    q = queue if queue is not None else get_queue(settings)
+    rq_job = q.enqueue(
+        generate_cut_packaging, video_id, cut_id, kind,
+        item_ids=item_ids, k=k, regenerate=regenerate,
+        job_timeout=settings.rq_job_timeout,
+    )
+    logger.info("Enqueued packaging %s for cut %s (rq %s)", kind, cut_id, rq_job.id)
+    return {"cut_id": cut_id, "kind": kind, "rq_job_id": rq_job.id}
+
+
+def enqueue_frame_extraction(
+    video_id: str,
+    cut_id: int,
+    *,
+    item_ids: list[int] | None = None,
+    count: int | None = None,
+    regenerate: bool = False,
+    settings: Settings | None = None,
+    database=None,
+    queue=None,
+) -> dict:
+    """Enqueue DETERMINISTIC candidate-frame extraction (FFmpeg only, NO LLM)."""
+    settings = settings or get_settings()
+    if database is None:
+        from ..db import get_database
+
+        database = get_database(settings)
+    _cut_or_raise(database, video_id, cut_id)
+
+    from .packaging_jobs import extract_cut_frames
+
+    q = queue if queue is not None else get_queue(settings)
+    rq_job = q.enqueue(
+        extract_cut_frames, video_id, cut_id,
+        item_ids=item_ids, count=count, regenerate=regenerate,
+        job_timeout=settings.rq_job_timeout,
+    )
+    logger.info("Enqueued frame extraction for cut %s (rq %s)", cut_id, rq_job.id)
+    return {"cut_id": cut_id, "rq_job_id": rq_job.id}
+
+
+def enqueue_frame_ranking(
+    video_id: str,
+    cut_id: int,
+    *,
+    item_ids: list[int] | None = None,
+    regenerate: bool = False,
+    settings: Settings | None = None,
+    database=None,
+    queue=None,
+) -> dict:
+    """Enqueue the opt-in VISION ranking of the extracted frames (costs an LLM call)."""
+    settings = settings or get_settings()
+    if database is None:
+        from ..db import get_database
+
+        database = get_database(settings)
+    _cut_or_raise(database, video_id, cut_id)
+
+    from .packaging_jobs import rank_cut_frames
+
+    q = queue if queue is not None else get_queue(settings)
+    rq_job = q.enqueue(
+        rank_cut_frames, video_id, cut_id,
+        item_ids=item_ids, regenerate=regenerate,
+        job_timeout=settings.rq_job_timeout,
+    )
+    logger.info("Enqueued frame ranking for cut %s (rq %s)", cut_id, rq_job.id)
+    return {"cut_id": cut_id, "rq_job_id": rq_job.id}
+
+
+def enqueue_audience_match(
+    video_id: str,
+    *,
+    regenerate: bool = False,
+    settings: Settings | None = None,
+    database=None,
+    queue=None,
+) -> dict:
+    """Enqueue the cheap, cached-per-live audience→topic match (costs an LLM call)."""
+    settings = settings or get_settings()
+    if database is None:
+        from ..db import get_database
+
+        database = get_database(settings)
+
+    from ..db import repo
+
+    with database.session() as s:
+        if repo.get_video(s, video_id) is None:
+            raise KeyError(video_id)
+
+    from .packaging_jobs import match_live_audience
+
+    q = queue if queue is not None else get_queue(settings)
+    rq_job = q.enqueue(
+        match_live_audience, video_id, regenerate=regenerate,
+        job_timeout=settings.rq_job_timeout,
+    )
+    logger.info("Enqueued audience match for live %s (rq %s)", video_id, rq_job.id)
+    return {"video_id": video_id, "rq_job_id": rq_job.id}
 
 
 def enqueue_video(
@@ -231,10 +475,11 @@ def delete_video(
     stopper=None,
     force: bool = False,
 ) -> dict:
-    """Delete EVERYTHING about the video from the database. Refuses if active (stop it first).
+    """Delete EVERYTHING about the video (database + files). Refuses if active (stop it first).
 
-    There are no per-video files to remove: the audio lives in a throwaway temp
-    dir (already gone) and transcripts/topics/chat are database rows.
+    The audio lives in a throwaway temp dir (already gone) and transcripts/topics/
+    chat are database rows; the one on-disk artifact is the rendered clips
+    (`<clips_dir>/<video_id>/…`), removed here so a deleted live leaves nothing.
     """
     settings = settings or get_settings()
     if database is None:
@@ -260,6 +505,15 @@ def delete_video(
 
     with database.session() as s:
         repo.delete_video(s, video_id)
+
+    # Remove the on-disk per-video artifacts (clips and export bundles). This is
+    # an explicit deletion — neither is ever swept by any automatic cleanup.
+    import shutil
+
+    for base in (settings.clips_dir, settings.exports_dir):
+        video_dir = Path(base) / video_id
+        if video_dir.exists():
+            shutil.rmtree(video_dir, ignore_errors=True)
 
     logger.info("Video %s deleted.", video_id)
     return {"video_id": video_id}

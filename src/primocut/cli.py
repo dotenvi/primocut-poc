@@ -36,11 +36,16 @@ def doctor() -> None:
     table.add_column("Status")
     table.add_column("Detail", overflow="fold")
     for c in report.checks:
-        status = "[green]OK[/green]" if c.ok else "[red]FAILED[/red]"
+        if c.warn:
+            status = "[yellow]WARN[/yellow]"
+        elif c.ok:
+            status = "[green]OK[/green]"
+        else:
+            status = "[red]FAILED[/red]"
         table.add_row(c.name, status, c.detail)
     console.print(table)
 
-    failures = [c for c in report.checks if not c.ok]
+    failures = [c for c in report.checks if not c.ok and not c.warn]
     if failures:
         console.print("\n[bold yellow]How to fix:[/bold yellow]")
         for c in failures:
@@ -183,6 +188,49 @@ def worker() -> None:
     conn = Redis.from_url(settings.redis_url)
     console.print(f"[green]Worker[/green] listening on queue '{settings.rq_queue}' at {settings.redis_url}")
     Worker([Queue(settings.rq_queue, connection=conn)], connection=conn).work()
+
+
+@app.command()
+def export(
+    video_id: str = typer.Argument(..., help="Live (YouTube video) id"),
+    cut: int = typer.Option(..., "--cut", "-c", help="Cut id to export"),
+    render_missing: bool = typer.Option(
+        False, "--render-missing",
+        help="Render un-rendered items first (else the export fails listing them)",
+    ),
+    skip_master: bool = typer.Option(
+        False, "--skip-master", help="Do not build the concatenated master.mp4",
+    ),
+    upscale_1440p: bool = typer.Option(
+        False, "--upscale-1440p", help="Re-encode the master to 1440p via NVENC",
+    ),
+    no_zip: bool = typer.Option(
+        False, "--no-zip", help="Only write the package folder (skip the .zip)",
+    ),
+) -> None:
+    """Export a cut into a deliverable bundle (clips + SRT + master + manifests).
+
+    Runs INLINE (no worker needed) and prints the package folder path. Clips must
+    already be rendered — use --render-missing to render the missing ones first.
+    """
+    setup_logging()
+    from .db import get_database
+    from .worker.export_jobs import export_cut
+
+    settings = get_settings()
+    database = get_database(settings)
+    result = export_cut(
+        video_id, cut, render_missing=render_missing, skip_master=skip_master,
+        upscale_1440p=upscale_1440p, make_zip=not no_zip,
+        settings=settings, database=database,
+    )
+    if result["state"] != "done":
+        console.print(f"[red]Export failed:[/red] {result.get('error')}")
+        raise typer.Exit(code=1)
+    console.print(f"[green]Exported[/green] {result['items']} clip(s) to:")
+    console.print(f"  {result['package_dir']}")
+    if result.get("zip_path"):
+        console.print(f"  {result['zip_path']}")
 
 
 @app.command()

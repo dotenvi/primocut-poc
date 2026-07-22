@@ -175,6 +175,104 @@ class Settings(BaseSettings):
     enrich_vision_model: str = ""
     enrich_comments_model: str = ""
 
+    # --- Phase 3: clip rendering (FFmpeg/NVENC) ---
+    # Base dir for the rendered clips. Unlike the audio (a throwaway temp dir),
+    # clips are DELIVERABLES: they are laid out under
+    # `<clips_dir>/<video_id>/<cut_id>/NNN-slug.mp4`, never swept by any cleanup,
+    # and removed only by an explicit delete.
+    clips_dir: Path = Path("clips")
+    # Only the SECTION around an item is downloaded (an ephemeral intermediate,
+    # like the audio). This margin is added on each side because yt-dlp cuts the
+    # download at keyframes: the margin guarantees the exact item range sits
+    # inside the fetched section, so the FFmpeg re-encode can trim to it exactly.
+    render_section_margin_s: float = 15.0
+    # Default fine-cut encoder. "nvenc" (h264_nvenc) is the default — a real
+    # re-encode gives exact start/end boundaries; on an NVENC failure the job
+    # falls back to "libx264" (slower, logged as a warning). `--fast-copy`
+    # (`-c copy`) is opt-in per render and documented as keyframe-imprecise.
+    render_encoder: str = "nvenc"  # "nvenc" | "libx264"
+    render_nvenc_cq: int = 19  # NVENC constant-quality level (lower = better)
+    render_x264_crf: int = 18  # libx264 CRF (fallback encoder)
+    render_audio_bitrate: str = "192k"
+
+    # --- Phase 3: cut export (packaging a cut into a deliverable bundle) ---
+    # Base dir for the export packages. Kept SEPARATE from clips_dir: clips are the
+    # per-item deliverables, an export is the assembled bundle (clips copied in
+    # order + per-clip SRT + concat master + manifests, optionally zipped). Export
+    # NEVER mutates the originals under clips_dir. Layout:
+    # `<exports_dir>/<video_id>/<cut_id>/<cut-slug>-<timestamp>/` (history kept),
+    # with a sibling `<cut-slug>-<timestamp>.zip`.
+    exports_dir: Path = Path("exports")
+    # Target height for `--upscale-1440p`: the master is re-encoded to this height
+    # (width auto, even) via NVENC scale so YouTube assigns better codecs to the
+    # >=1440p upload. Only the master is upscaled; the individual clips stay at the
+    # original resolution (they are editing sources).
+    export_upscale_height: int = 1440
+
+    # --- Phase 3: surgical WhisperX boundary alignment (isolated venv) ---
+    # The boundary refinement runs in a SEPARATE venv: whisperx + torch 2.8 +
+    # pyannote 4 conflict with the validated worker venv (they downgrade
+    # huggingface-hub and graft a torch/CUDA stack over faster-whisper's runtime),
+    # so the render worker shells out to `align_python` (the align venv's
+    # interpreter) for the word-level pass. Unset/missing → alignment is
+    # unavailable and the render keeps the item's original [start, end]:
+    # refinement is an improvement, never a blocker (silent fallback).
+    align_python: str = ""
+    # Move a boundary only to the nearest word/sentence edge WITHIN this tolerance;
+    # a nearest edge farther than this keeps the original timestamp (never cuts
+    # mid-word). Kept <= render_section_margin_s so the alignment window always
+    # sits inside the already-downloaded section (no extra download).
+    align_tolerance_s: float = 3.0
+    # Hard cap on the alignment subprocess; exceeding it → silent fallback.
+    align_timeout_s: float = 60.0
+    # Optional wav2vec2 alignment model override (PT-BR); empty → whisperx picks
+    # its default `pt` align model.
+    align_model: str = ""
+
+    # --- Phase 3: AI packaging of a cut (opt-in — costs LLM) ---
+    # Per-clip title/thumbnail-brief generation and frame ranking, driven by the
+    # niche's Phase 2 patterns. Everything here is OPT-IN (guideline 9): the LLM
+    # passes run only on an explicit user action; frame EXTRACTION is deterministic
+    # (FFmpeg only, never an LLM). Results are paid for once per clip by a content
+    # hash and regenerated only on an explicit request.
+    #
+    # Default number of candidate titles a generation proposes (selectable per run
+    # in the UI). Each proposal cites which measured patterns it applies.
+    packaging_titles_k: int = 5
+    # Default number of candidate frames extracted per clip (selectable per run).
+    packaging_frames_per_clip: int = 3
+    # FFmpeg scene-detection threshold for the deterministic frame extraction: a
+    # frame is a scene-change candidate when its `scene` score exceeds this. When
+    # the clip yields fewer scene changes than requested, evenly-spaced samples fill
+    # the rest — so a flat clip still returns the requested count.
+    packaging_scene_threshold: float = 0.30
+    # Which patterns feed the title/brief prompt. A boolean attribute counts as a
+    # niche CONVENTION (a requirement/table-stake, not a differential) when its
+    # frequency across the WHOLE niche is at least this — such attributes never
+    # separate outliers from control (their Wilson intervals overlap high), so the
+    # differential guard would drop them, yet they are what the niche requires.
+    packaging_convention_floor: float = 0.85
+    # A carries-value pattern (the "name that carries", a recurring topic word, a
+    # thumbnail-text token) is reported only when it appears in at least this many
+    # OUTLIER videos AND at a lift over the control of at least
+    # `packaging_carries_value_min_lift`. This is the never-invent-a-pattern guard
+    # for non-boolean values, mirroring the Wilson guard for booleans.
+    packaging_carries_value_min_videos: int = 3
+    packaging_carries_value_min_lift: float = 1.5
+    # How many real outlier examples (titles + enriched attributes) the prompt
+    # carries as references the model can cite.
+    packaging_examples: int = 6
+    # Which niche format's patterns drive packaging by default (clips are usually
+    # posted as long-form on the destination channels). "long" | "short".
+    packaging_format: str = "long"
+    # Model overrides for the packaging LLM passes. EMPTY means "use the selected
+    # provider's configured model" (see llm_provider). The frame-ranking pass needs
+    # a VISION-capable model. A model id is provider-specific.
+    packaging_titles_model: str = ""
+    packaging_brief_model: str = ""
+    packaging_frame_rank_model: str = ""
+    packaging_audience_model: str = ""
+
 
 def get_settings() -> Settings:
     """Instantiate the settings reading environment/.env at call time."""

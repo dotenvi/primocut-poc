@@ -8,6 +8,7 @@ fix command when it fails. It installs nothing — it only reports.
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 import subprocess
 
@@ -21,6 +22,10 @@ class CheckResult(BaseModel):
     ok: bool
     detail: str = ""
     fix: str | None = None
+    # A soft check: reported as WARN, but it does NOT fail the run (exit code 0).
+    # Used for optional capabilities (e.g. the WhisperX align venv): its absence is
+    # a heads-up, not a broken environment.
+    warn: bool = False
 
 
 class DiagnosticsReport(BaseModel):
@@ -28,7 +33,8 @@ class DiagnosticsReport(BaseModel):
 
     @property
     def ok(self) -> bool:
-        return all(c.ok for c in self.checks)
+        # A warning never fails the run; only a hard `not ok` does.
+        return all(c.ok or c.warn for c in self.checks)
 
 
 def check_gpu() -> CheckResult:
@@ -72,6 +78,40 @@ def check_ffmpeg() -> CheckResult:
         ok=False,
         detail="not found on PATH",
         fix="sudo apt install ffmpeg",
+    )
+
+
+def check_nvenc() -> CheckResult:
+    """NVENC (h264_nvenc) actually works — the default clip-render encoder.
+
+    Not assumed from the presence of a GPU: WSL2 exposes NVENC through the Windows
+    driver, so this runs a trivial real encode to confirm FFmpeg can drive it. On
+    failure, rendering still works via the libx264 fallback (slower).
+    """
+    name = "NVENC (h264_nvenc)"
+    if shutil.which("ffmpeg") is None:
+        return CheckResult(name=name, ok=False, detail="FFmpeg not found",
+                           fix="sudo apt install ffmpeg")
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "color=c=black:s=128x72:d=0.1",
+             "-c:v", "h264_nvenc", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        return CheckResult(name=name, ok=False, detail="FFmpeg not found",
+                           fix="sudo apt install ffmpeg")
+    except subprocess.TimeoutExpired:
+        return CheckResult(name=name, ok=False, detail="nvenc probe hung (timeout)")
+    if proc.returncode == 0:
+        return CheckResult(name=name, ok=True, detail="h264_nvenc encodes")
+    return CheckResult(
+        name=name, ok=False,
+        detail=(proc.stderr or "h264_nvenc failed").strip().splitlines()[-1][:200],
+        fix="Rendering falls back to libx264 (slower). For NVENC, confirm the "
+            "NVIDIA driver on Windows exposes the encoder to WSL2 (see `nvidia-smi`), "
+            "or set PRIMOCUT_RENDER_ENCODER=libx264.",
     )
 
 
@@ -193,17 +233,62 @@ def check_llm_sdk(settings: Settings) -> CheckResult:
     )
 
 
+def check_whisperx(settings: Settings) -> CheckResult:
+    """Validate the isolated WhisperX align venv — WHEN it is configured.
+
+    Optional Phase 3 capability (surgical boundary refinement). It lives in its
+    OWN venv (`PRIMOCUT_ALIGN_PYTHON`) because whisperx/torch/pyannote conflict
+    with the worker venv. Absence is a WARNING, never an error: without it the
+    render simply keeps each item's original [start, end].
+    """
+    name = "WhisperX align (optional)"
+    py = settings.align_python
+    if not py:
+        return CheckResult(
+            name=name, ok=True, warn=True,
+            detail="not configured — boundary refinement disabled",
+            fix="Optional: create .venv-align and set PRIMOCUT_ALIGN_PYTHON "
+                "(python3 -m venv .venv-align && "
+                "/usr/bin/python3 -m pip --python .venv-align/bin/python install -e '.[align]').",
+        )
+    if not shutil.which(py) and not os.path.exists(py):
+        return CheckResult(
+            name=name, ok=True, warn=True,
+            detail=f"PRIMOCUT_ALIGN_PYTHON points at a missing interpreter ({py})",
+            fix="Point PRIMOCUT_ALIGN_PYTHON at the align venv's python.",
+        )
+    try:
+        proc = subprocess.run(
+            [py, "-c", "import whisperx; print(whisperx.__version__)"],
+            capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return CheckResult(name=name, ok=True, warn=True,
+                           detail=f"could not run the align interpreter ({exc})")
+    if proc.returncode == 0:
+        return CheckResult(name=name, ok=True,
+                           detail=f"whisperx {(proc.stdout or '').strip()} in {py}")
+    return CheckResult(
+        name=name, ok=True, warn=True,
+        detail="align venv present but whisperx not importable",
+        fix="/usr/bin/python3 -m pip --python "
+            f"{py} install -e '.[align]'",
+    )
+
+
 def run_diagnostics(settings: Settings | None = None) -> DiagnosticsReport:
     settings = settings or get_settings()
     return DiagnosticsReport(
         checks=[
             check_gpu(),
             check_ffmpeg(),
+            check_nvenc(),
             check_ytdlp(),
             check_api_key(settings),
             check_llm_sdk(settings),
             check_youtube_api(settings),
             check_redis(settings),
             check_db(settings),
+            check_whisperx(settings),
         ]
     )
