@@ -23,7 +23,11 @@ from primocut.db.session import Database
 from primocut.metrics import enrichment
 from primocut.worker.enrich_jobs import enrich_videos
 
-NOW = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)
+# Anchored to the real clock: the project enrich endpoints score maturity against
+# the actual system time (they take no injectable `now`), so a fixture that dated
+# videos from a frozen constant would silently flip a "provisional" (< 7 days) video
+# into a mature one once wall-clock time passed that constant + 7 days.
+NOW = datetime.now(timezone.utc)
 
 THUMB_RAW = {
     "face_count": 2,
