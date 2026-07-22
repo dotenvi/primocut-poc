@@ -35,6 +35,56 @@ export const api = {
   stop: (pid, lid) => req('POST', `/projects/${pid}/lives/${lid}/stop`),
   removeLive: (pid, lid) => req('DELETE', `/projects/${pid}/lives/${lid}`),
 
+  // Cut room (Phase 3): the decision bench — cuts, items (topic or manual range),
+  // transactional reorder, and per-live topic triage. No rendering is triggered.
+  cuts: (pid, lid) => req('GET', `/projects/${pid}/lives/${lid}/cuts`),
+  createCut: (pid, lid, name) => req('POST', `/projects/${pid}/lives/${lid}/cuts`, { name }),
+  bench: (pid, lid, cid) => req('GET', `/projects/${pid}/lives/${lid}/cuts/${cid}`),
+  renameCut: (pid, lid, cid, name) =>
+    req('PATCH', `/projects/${pid}/lives/${lid}/cuts/${cid}`, { name }),
+  deleteCut: (pid, lid, cid) => req('DELETE', `/projects/${pid}/lives/${lid}/cuts/${cid}`),
+  addCutItem: (pid, lid, cid, body) =>
+    req('POST', `/projects/${pid}/lives/${lid}/cuts/${cid}/items`, body),
+  removeCutItem: (pid, lid, cid, iid) =>
+    req('DELETE', `/projects/${pid}/lives/${lid}/cuts/${cid}/items/${iid}`),
+  reorderCutItems: (pid, lid, cid, itemIds) =>
+    req('PATCH', `/projects/${pid}/lives/${lid}/cuts/${cid}/items`, { item_ids: itemIds }),
+  setTriage: (pid, lid, tid, state) =>
+    req('PATCH', `/projects/${pid}/lives/${lid}/topics/${tid}/triage`, { state }),
+
+  // Rendering (Phase 3, step 2): background per-item clip render on the existing
+  // queue. `body` = {} for all items, {item_id} for one; {regenerate}/{fast_copy}
+  // as options. Progress is polled per clip via the bench (item.clip) or listClips.
+  render: (pid, lid, cid, body = {}) =>
+    req('POST', `/projects/${pid}/lives/${lid}/cuts/${cid}/render`, body),
+  listClips: (pid, lid, cid) => req('GET', `/projects/${pid}/lives/${lid}/cuts/${cid}/clips`),
+  deleteClip: (pid, lid, cid, clipId) =>
+    req('DELETE', `/projects/${pid}/lives/${lid}/cuts/${cid}/clips/${clipId}`),
+
+  // Export (Phase 3, later step): package the cut's clips + SRT + master +
+  // manifests into a zip, in the background. `body` = {render_missing, skip_master,
+  // upscale_1440p}. Polled via the bench (`export`) or exportStatus.
+  export: (pid, lid, cid, body = {}) =>
+    req('POST', `/projects/${pid}/lives/${lid}/cuts/${cid}/export`, body),
+  exportStatus: (pid, lid, cid) =>
+    req('GET', `/projects/${pid}/lives/${lid}/cuts/${cid}/export`),
+
+  // AI packaging (Phase 3, opt-in — each LLM pass costs money; frame EXTRACTION is
+  // free/deterministic). `context` is the read-only niche patterns kit; the rest
+  // run in the background, polled per item via the bench (item.packaging).
+  packagingContext: (pid, lid) =>
+    req('GET', `/projects/${pid}/lives/${lid}/packaging/context`),
+  genTitles: (pid, lid, cid, body = {}) =>
+    req('POST', `/projects/${pid}/lives/${lid}/cuts/${cid}/packaging/titles`, body),
+  genBrief: (pid, lid, cid, body = {}) =>
+    req('POST', `/projects/${pid}/lives/${lid}/cuts/${cid}/packaging/brief`, body),
+  extractFrames: (pid, lid, cid, body = {}) =>
+    req('POST', `/projects/${pid}/lives/${lid}/cuts/${cid}/packaging/frames`, body),
+  rankFrames: (pid, lid, cid, body = {}) =>
+    req('POST', `/projects/${pid}/lives/${lid}/cuts/${cid}/packaging/frames/rank`, body),
+  matchAudience: (pid, lid, body = {}) =>
+    req('POST', `/projects/${pid}/lives/${lid}/audience-match`, body),
+
   // Radar — global event log. Success is silent; failure is loud.
   events: (params) => req('GET', `/events${qs({ category: 'niche', ...params })}`),
   alerts: () => req('GET', '/alerts'),
@@ -89,6 +139,22 @@ export const backfillActive = (state) => BACKFILL_ACTIVE.includes(state)
 
 // An enrichment row is worth polling only while its LLM call is in flight.
 export const enrichActive = (attrs) => !!attrs && attrs.state === 'running'
+
+// A clip is still being produced (worth polling) until it is done or errored.
+const CLIP_ACTIVE = ['queued', 'downloading_section', 'cutting']
+export const clipActive = (clip) => !!clip && CLIP_ACTIVE.includes(clip.state)
+
+// An export is still being produced (worth polling) until it is done or errored.
+const EXPORT_ACTIVE = ['queued', 'packaging']
+export const exportActive = (exp) => !!exp && EXPORT_ACTIVE.includes(exp.state)
+
+// A packaging row (title/thumb_brief/frame_ranking) is worth polling while its
+// LLM pass is in flight. `item.packaging[kind]` is null until the first run.
+export const packagingActive = (row) => !!row && row.state === 'running'
+// Any of a cut's items still has a packaging pass running → keep polling the bench.
+export const cutPackagingActive = (items) =>
+  (items || []).some((it) => ['title', 'thumb_brief', 'frame_ranking']
+    .some((k) => packagingActive(it.packaging && it.packaging[k])))
 
 export const ACTIVE = ['queued', 'downloading', 'transcribing', 'analyzing']
 export const isActive = (status) => ACTIVE.includes(status)

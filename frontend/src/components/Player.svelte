@@ -5,6 +5,9 @@
   import { onMount, onDestroy } from 'svelte'
 
   export let videoId
+  // Optional: notified with the YT player state on every change (1 playing,
+  // 2 paused, 0 ended, …). The Preview-cut driver uses it to react to buffering.
+  export let onState = null
 
   let host // div that the API replaces with the <iframe>
   let player = null
@@ -49,6 +52,15 @@
     return true
   }
 
+  // Playback controls for the virtual Preview cut (plays the composition by seek
+  // only — no download, no encode). `getTime` lets the parent's driver detect the
+  // end of an item and jump to the next. All are no-ops when the player is absent.
+  export function play() { if (player && ready && !blocked) player.playVideo() }
+  export function pause() { if (player && ready && !blocked) player.pauseVideo() }
+  export function getTime() {
+    return player && ready && !blocked ? player.getCurrentTime() : 0
+  }
+
   onMount(async () => {
     try {
       const YT = await loadApi()
@@ -63,6 +75,7 @@
               pendingSeek = null
             }
           },
+          onStateChange: (e) => { if (typeof onState === 'function') onState(e.data) },
           // 101 / 150 = embedding disabled by the video owner.
           onError: (e) => {
             if (e && (e.data === 101 || e.data === 150)) blocked = true

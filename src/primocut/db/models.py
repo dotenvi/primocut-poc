@@ -109,6 +109,222 @@ class TopicRow(Base):
     score: Mapped[float] = mapped_column(Float, default=0.0)
 
 
+# ------------------------- Phase 3: assisted cutting (decision bench) -------------------------
+#
+# Two DELIBERATELY separate concepts (they were one `topics.status` field before,
+# dropped 2026-07-13 with the retired "export cuts" feature and now reinstated as
+# two — see the 2026-07-19 decision log). Both tables are created by create_all
+# (whole new tables), never by an NNN_*.sql migration.
+#
+# 1. TopicTriageRow = the user's OPINION about a topic, scoped to the LIVE and
+#    shared across its cuts. Absence of a row means `open`; the only stored states
+#    are `maybe`/`discarded`. `in` is NEVER written here.
+# 2. CutRow + CutItemRow = an ORDERED composition. Membership (`in`) is derived
+#    exclusively from cut_items of the ACTIVE cut, so a column can never again
+#    conflate an opinion with a membership.
+
+
+class TopicTriageRow(Base):
+    """Per-live triage of a topic (the user's opinion, persisted across sessions).
+
+    Keyed uniquely per (video_id, topic_id). `topic_id` CASCADEs: regenerating a
+    live's topics replaces every topic row, and an opinion about a topic that no
+    longer exists is moot, so it goes with it.
+    """
+
+    __tablename__ = "topic_triage"
+    __table_args__ = (
+        UniqueConstraint("video_id", "topic_id", name="uq_topic_triage_video_topic"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[str] = mapped_column(
+        ForeignKey("videos.id", ondelete="CASCADE"), index=True
+    )
+    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id", ondelete="CASCADE"))
+    state: Mapped[str] = mapped_column(String)  # "maybe" | "discarded"
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class CutRow(Base):
+    """An ordered composition over one live. A live has N cuts; each live gets a
+    default `Cut 1` created lazily. `status` leaves room for later steps
+    (`rendering`/`rendered`) but stays `draft` in the decision-bench step."""
+
+    __tablename__ = "cuts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[str] = mapped_column(
+        ForeignKey("videos.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String, default="Cut 1")
+    status: Mapped[str] = mapped_column(String, default="draft")
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class CutItemRow(Base):
+    """One ordered slot of a cut: a topic OR a manual time range.
+
+    Every item stores its own `start_s`/`end_s` — snapshotted from the topic for a
+    topic item. `topic_id` is `ON DELETE SET NULL` (not CASCADE): regenerating the
+    live's topics must not silently drop items from a composition, so a topic item
+    degrades into a preserved manual range instead of disappearing.
+    """
+
+    __tablename__ = "cut_items"
+    __table_args__ = (Index("ix_cut_items_cut_position", "cut_id", "position"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cut_id: Mapped[int] = mapped_column(ForeignKey("cuts.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)  # 0..n-1, contiguous
+    topic_id: Mapped[int | None] = mapped_column(
+        ForeignKey("topics.id", ondelete="SET NULL"), default=None
+    )
+    start_s: Mapped[float] = mapped_column(Float)
+    end_s: Mapped[float] = mapped_column(Float)
+
+
+class ClipRow(Base):
+    """A rendered clip: one MP4 deliverable per cut item (H.264 + AAC, original
+    resolution), produced by the section download + FFmpeg re-encode.
+
+    Keyed 1:1 to its `cut_item` (`ON DELETE CASCADE`): removing the item from the
+    composition — an explicit user action — takes its clip row with it (the file
+    is unlinked in the same route). There is NO automatic/scheduled cleanup of
+    clips (contrast the ephemeral audio): they are deliverables, deleted only by
+    an explicit action.
+
+    `params_hash` is the pay-once cache key over (range + padding + encode
+    profile): the same item re-rendered with the same parameters is skipped;
+    `regenerate` forces it. `encode_profile` is what was REQUESTED
+    (`nvenc`/`libx264`/`copy`); `encoder_used` is what actually produced the file
+    (records `libx264` when NVENC fell back).
+    """
+
+    __tablename__ = "clips"
+    __table_args__ = (Index("ix_clips_cut_item", "cut_item_id", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cut_item_id: Mapped[int] = mapped_column(
+        ForeignKey("cut_items.id", ondelete="CASCADE"), index=True
+    )
+    # Denormalized so the file path/URL can be built without joins.
+    video_id: Mapped[str] = mapped_column(String, index=True)
+    cut_id: Mapped[int] = mapped_column(Integer, index=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)  # NNN at render time
+    filename: Mapped[str] = mapped_column(String, default="")  # "001-slug.mp4"
+    rel_path: Mapped[str] = mapped_column(String, default="")  # "<vid>/<cut>/001-slug.mp4"
+    # queued -> downloading_section -> [aligning] -> cutting -> done | error
+    # (aligning is the surgical WhisperX boundary pass; present only when an align
+    # venv is configured, otherwise the item goes straight to cutting.)
+    state: Mapped[str] = mapped_column(String, default="queued")
+    error: Mapped[str] = mapped_column(Text, default="")
+    encode_profile: Mapped[str] = mapped_column(String, default="")  # requested
+    encoder_used: Mapped[str] = mapped_column(String, default="")  # effective
+    params_hash: Mapped[str] = mapped_column(String, default="")  # pay-once cache key
+    padding_s: Mapped[float] = mapped_column(Float, default=0.0)
+    # `start_s`/`end_s` are the REQUESTED bounds (the cut item's range). The
+    # surgical WhisperX pass can snap the ACTUAL cut points to a word edge, so the
+    # effective encoded window is recorded separately — the export SRT offset and
+    # the manifest timestamps must reflect what the MP4 really contains. With
+    # alignment off they equal the requested bounds.
+    start_s: Mapped[float] = mapped_column(Float, default=0.0)
+    end_s: Mapped[float] = mapped_column(Float, default=0.0)
+    render_start_s: Mapped[float] = mapped_column(Float, default=0.0)
+    render_end_s: Mapped[float] = mapped_column(Float, default=0.0)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    duration_s: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class ExportRow(Base):
+    """The state of a cut's latest export (one row per cut, upserted).
+
+    An export packages the cut's rendered clips into a deliverable bundle on disk
+    (see `render/package.py`); this row is what the UI polls to learn when the zip
+    is ready. History is kept on disk (timestamped package dirs), but only the
+    LATEST export's paths/state live here. `package_rel_path`/`zip_rel_path` are
+    relative to `exports_dir`.
+    """
+
+    __tablename__ = "exports"
+    __table_args__ = (Index("ix_exports_cut", "cut_id", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    video_id: Mapped[str] = mapped_column(String, index=True)
+    cut_id: Mapped[int] = mapped_column(Integer, index=True)
+    # queued -> packaging -> done | error
+    state: Mapped[str] = mapped_column(String, default="queued")
+    error: Mapped[str] = mapped_column(Text, default="")
+    package_rel_path: Mapped[str] = mapped_column(String, default="")
+    zip_rel_path: Mapped[str] = mapped_column(String, default="")
+    item_count: Mapped[int] = mapped_column(Integer, default=0)
+    skip_master: Mapped[bool] = mapped_column(Boolean, default=False)
+    upscaled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class CutPackagingRow(Base):
+    """An opt-in AI packaging artifact for ONE cut item (guideline 9).
+
+    Keyed per (cut_item_id, kind): a clip is a video of its own, so its titles /
+    thumbnail brief / frame ranking are generated and cached per clip, and the
+    export manifest reads one row per item. `ON DELETE CASCADE` with the item:
+    removing the item from the composition drops its packaging with it.
+
+    `kind` ∈ `title | thumb_brief | frame_ranking`. `title`/`thumb_brief` are LLM
+    passes; `frame_ranking` is the opt-in vision pass over the deterministically
+    extracted frames (extraction itself writes JPEGs to disk, no row). Paid for once
+    by `content_hash` (over the clip content + the niche patterns that shaped it);
+    `state`/`error` let the UI poll an in-flight generation, mirroring
+    `video_attributes`.
+    """
+
+    __tablename__ = "cut_packaging"
+    __table_args__ = (
+        Index("ix_cut_packaging_item_kind", "cut_item_id", "kind", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    cut_item_id: Mapped[int] = mapped_column(
+        ForeignKey("cut_items.id", ondelete="CASCADE"), index=True
+    )
+    # Denormalized so the export/bench can group without a join back to the item.
+    cut_id: Mapped[int] = mapped_column(Integer, index=True)
+    kind: Mapped[str] = mapped_column(String)  # "title" | "thumb_brief" | "frame_ranking"
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    content_hash: Mapped[str] = mapped_column(String, default="")
+    state: Mapped[str] = mapped_column(String, default="done")  # "running" | "done" | "error"
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class LiveAudienceMatchRow(Base):
+    """The cached audience→topic match for a live (opt-in — costs one cheap LLM).
+
+    One row per live: the semantic match of the niche's synthesised audience
+    requests to the live's topics (the deferred `audience_asked` bench signal). The
+    payload maps topic_id → the requests it delivers. `content_hash` folds the
+    live's topics AND the niche's request set, so it is recomputed only when either
+    changes; degrades silently to an empty match when the niche has no syntheses.
+    """
+
+    __tablename__ = "live_audience_match"
+
+    video_id: Mapped[str] = mapped_column(
+        ForeignKey("videos.id", ondelete="CASCADE"), primary_key=True
+    )
+    content_hash: Mapped[str] = mapped_column(String, default="")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    state: Mapped[str] = mapped_column(String, default="done")
+    error: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 class SchemaMigration(Base):
     __tablename__ = "schema_migrations"
 

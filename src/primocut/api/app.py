@@ -44,12 +44,20 @@ def create_app() -> FastAPI:
     def health() -> dict:
         return {"ok": True}
 
+    from .cuts import build_cuts_router
     from .events import build_events_router
     from .lives import build_lives_router
     from .metrics import build_metrics_router
     from .projects import build_projects_router
 
     app.include_router(build_events_router(get_db=get_db))
+    app.include_router(
+        build_cuts_router(
+            get_db=get_db,
+            get_queue_dep=get_queue_dep,
+            get_settings_dep=get_settings_dep,
+        )
+    )
     app.include_router(
         build_lives_router(
             get_db=get_db,
