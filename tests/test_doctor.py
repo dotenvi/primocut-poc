@@ -22,6 +22,31 @@ def test_check_ffmpeg_present(mocker):
     assert r.fix is None
 
 
+def test_check_nvenc_ok(mocker):
+    mocker.patch.object(doctor.shutil, "which", return_value="/usr/bin/ffmpeg")
+    mocker.patch.object(doctor.subprocess, "run",
+                        return_value=subprocess.CompletedProcess(["ffmpeg"], 0, "", ""))
+    r = doctor.check_nvenc()
+    assert r.ok is True
+
+
+def test_check_nvenc_fails_points_to_libx264(mocker):
+    mocker.patch.object(doctor.shutil, "which", return_value="/usr/bin/ffmpeg")
+    mocker.patch.object(
+        doctor.subprocess, "run",
+        return_value=subprocess.CompletedProcess(["ffmpeg"], 1, "", "Cannot load nvcuvid"),
+    )
+    r = doctor.check_nvenc()
+    assert r.ok is False
+    assert "libx264" in (r.fix or "")
+
+
+def test_check_nvenc_ffmpeg_missing(mocker):
+    mocker.patch.object(doctor.shutil, "which", return_value=None)
+    r = doctor.check_nvenc()
+    assert r.ok is False
+
+
 def test_check_ytdlp_missing(mocker):
     mocker.patch.object(doctor.importlib.util, "find_spec", return_value=None)
     mocker.patch.object(doctor.shutil, "which", return_value=None)
@@ -138,6 +163,43 @@ def test_check_db_ok(tmp_path):
     assert r.ok is True
 
 
+def test_check_whisperx_unconfigured_is_a_warning_not_an_error():
+    # Absence of the optional align venv is a WARN: ok stays True (exit code 0).
+    r = doctor.check_whisperx(Settings(align_python=""))
+    assert r.ok is True and r.warn is True
+    assert "not configured" in r.detail
+
+
+def test_check_whisperx_missing_interpreter_warns(mocker):
+    mocker.patch.object(doctor.shutil, "which", return_value=None)
+    mocker.patch.object(doctor.os.path, "exists", return_value=False)
+    r = doctor.check_whisperx(Settings(align_python="/nope/python"))
+    assert r.ok is True and r.warn is True
+    assert "missing interpreter" in r.detail
+
+
+def test_check_whisperx_installed_ok(mocker):
+    mocker.patch.object(doctor.os.path, "exists", return_value=True)
+    mocker.patch.object(
+        doctor.subprocess, "run",
+        return_value=subprocess.CompletedProcess(["py"], 0, "3.8.6\n", ""),
+    )
+    r = doctor.check_whisperx(Settings(align_python=".venv-align/bin/python"))
+    assert r.ok is True and r.warn is False
+    assert "3.8.6" in r.detail
+
+
+def test_check_whisperx_present_but_not_importable_warns(mocker):
+    mocker.patch.object(doctor.os.path, "exists", return_value=True)
+    mocker.patch.object(
+        doctor.subprocess, "run",
+        return_value=subprocess.CompletedProcess(["py"], 1, "", "ModuleNotFoundError"),
+    )
+    r = doctor.check_whisperx(Settings(align_python=".venv-align/bin/python"))
+    assert r.ok is True and r.warn is True
+    assert "not importable" in r.detail
+
+
 def test_run_diagnostics_aggregates(mocker, tmp_path):
     mocker.patch.object(doctor.importlib.util, "find_spec", return_value=None)
     mocker.patch.object(doctor.shutil, "which", return_value=None)
@@ -148,7 +210,7 @@ def test_run_diagnostics_aggregates(mocker, tmp_path):
     report = doctor.run_diagnostics(
         Settings(anthropic_api_key=None, youtube_api_key=None, db_path=tmp_path / "x.db")
     )
-    assert len(report.checks) == 8
+    assert len(report.checks) == 10
     assert report.ok is False
 
 

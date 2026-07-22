@@ -17,7 +17,7 @@ from primocut.models import (
 )
 
 _LEGACY_VERSIONS = [1, 2, 3, 4, 5, 6]
-_ALL_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+_ALL_VERSIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 
 def _db(tmp_path) -> Database:
