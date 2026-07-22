@@ -18,3 +18,8 @@ data/
 *.mp3
 report*.md
 !docs/**
+
+# Phase 3 deliverables (rendered clips + export bundles) — runtime output,
+# never committed (defaults for PRIMOCUT_CLIPS_DIR / PRIMOCUT_EXPORTS_DIR)
+clips/
+exports/

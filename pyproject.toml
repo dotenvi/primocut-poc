@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "primocut"
-version = "0.3.0"
+version = "0.4.0"
 description = "PRIMOCUT: live URL -> audio -> transcription -> chat -> topics in Markdown"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -23,6 +23,14 @@ dependencies = [
 cuda = [
     "nvidia-cublas-cu12",
     "nvidia-cudnn-cu12",
+]
+# Surgical WhisperX boundary alignment (Phase 3). MUST be installed into a
+# SEPARATE venv (`.venv-align`), NOT the worker venv: whisperx pins
+# huggingface-hub<1.0 and drags a torch 2.8 / pyannote 4 / CUDA stack that would
+# mutate the validated faster-whisper environment. The render worker shells out
+# to this venv's interpreter (PRIMOCUT_ALIGN_PYTHON); see .env.example.
+align = [
+    "whisperx>=3.8",
 ]
 
 [project.scripts]

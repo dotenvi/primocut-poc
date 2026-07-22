@@ -137,6 +137,99 @@ each shown with a **real quoted comment**, or the note that comments are disable
 project dashboard carries the batch actions, tags each reported pattern with its **source**,
 and shows **Audience requests** as one column per request type the niche actually used.
 
+**Assisted cutting (Phase 3 — delivered).** The Cut room is now a
+**decision bench** over a live's topics. Two deliberately separate concepts back it (see the
+[2026-07-19 decision](#2026-07-19--phase-3-scoped-the-marking-layer-returns-as-two-concepts)):
+**triage** (`topic_triage`, the user's per-live opinion — `maybe`/`discarded`, absence = `open`,
+shared across cuts and persisted across sessions) and **cut membership** (`cuts` + `cut_items`, a
+cut being an **ordered** selection of N items, each a topic or a manual range). The displayed
+state of a topic is **derived** in precedence — an item in the **active** cut → `in`; else the
+triage state; else `open` — so `in` is never stored as triage and a topic can read `in` in one cut
+while globally `maybe`. `GET …/cuts/{cut_id}` returns the active cut's items **and** every topic's
+derived state + signals in **one** query set (no N+1). The bench is three columns: a **Stage**
+(the embedded player with a **Source | Preview cut** toggle), the **topic bench** (each topic a
+decision line cycling `open → in → maybe → discarded`, with a `🔥 chat` tag on chat-peak topics and
+a reserved-but-empty `audience_asked` slot), and **Composition** (the active cut's reorderable
+items + a manual-range composer, the **Render** button, and the
+read-only **Packaging kit**). **Preview cut** plays the composition by **seek only** — no download,
+no encode — with a segmented scrub and a *"item N →"* overlay presented as the honest seek gap.
+
+**Rendering (Step 2 in place).** The **Render** button dispatches a **background** job on the
+existing queue that renders **one MP4 per cut item** (H.264 + AAC, original resolution) — the user
+keeps triaging while clips are produced, each item's status advancing in place
+(`queued → downloading_section → cutting → done | error`) by the same 2 s polling. Per item, in an
+**ephemeral temp dir**: yt-dlp downloads **only the section** around the item
+(`--download-sections`, a configurable **15 s margin** per side — yt-dlp cuts at keyframes, so the
+margin guarantees the exact range sits inside the fetched section), then FFmpeg **re-encodes** to
+the frame-exact `[start, end]`. The default encoder is **NVENC (`h264_nvenc`)** — a real re-encode
+is what makes the boundaries exact; on an NVENC failure it **falls back to `libx264`** (slower,
+warned), and `--fast-copy` (`-c copy`, keyframe-imprecise) is opt-in per render. **Failure is
+isolated per item** (one bad clip never wastes the others; the error shows on the row). Clips are
+**pay-once by parameters** (range + padding + encode profile): the same item re-rendered with the
+same parameters is skipped, a pure reorder just renames the file, and **regeneration is explicit**.
+They are **deliverables**: written under `PRIMOCUT_CLIPS_DIR/<video_id>/<cut_id>/NNN-slug.mp4`
+(NNN = position in the composition), **never swept by any automatic cleanup** — removed only by an
+explicit clip delete, item removal, or deleting the live. `doctor` validates NVENC with a **real**
+trivial encode (WSL2 exposes it through the Windows driver). The **surgical WhisperX** boundary
+refinement named in the Step 2 scope is now **delivered**: when an align venv is configured
+(`PRIMOCUT_ALIGN_PYTHON`), an `aligning` state between `downloading_section` and `cutting` extracts
+the item's own window **from the section already on disk** and runs wav2vec2 (PT-BR) word alignment
+to snap `[start, end]` to the nearest word edge within **±3 s** (never mid-word), under the
+`primocut:gpu` lock, with a **silent fallback** to the original bounds on any failure/timeout/absence.
+WhisperX runs in a **separate venv** (it would otherwise downgrade `huggingface-hub` and graft a
+torch/pyannote/CUDA stack over the validated faster-whisper worker); the render worker shells out to
+it. **Diarization** stays deferred as a documented extension point (pyannote is already available in
+that venv). See the [2026-07-20 alignment decision](#2026-07-20--phase-3-rendering-surgical-whisperx-boundary-refinement-isolated-venv-silent-fallback).
+
+**Export (Step — in place).** The **Export** button (next to Render in the Cut room) packages a
+whole cut into a **deliverable bundle** — a background job on the existing queue, polled like the
+clips. Into a **timestamped** dir `exports/<video_id>/<cut_id>/<cut-slug>-<stamp>/` (history kept,
+never auto-swept) it writes, in composition order: **`NNN-slug.mp4`** (the rendered clip **copied** —
+the originals under `clips_dir` are never touched), **`NNN-slug.srt`** (from the existing transcript,
+each cue offset to the clip's **effective** start — the WhisperX-refined bounds when alignment ran,
+recorded on the clip row as `render_start_s`/`render_end_s`; identical treatment for a manual range),
+a **`master.mp4`** and **`manifest.md`/`manifest.json`**. The master is **on by default and needs no
+re-encode**: because every clip shares the render profile, it is a **concat-demuxer stream copy**
+(`-c copy`, seconds) — `--skip-master` opts out. **`--upscale-1440p`** is the one re-encode path: it
+scales the concatenated master to 1440p via **NVENC** (libx264 fallback) so YouTube assigns better
+codecs to the ≥1440p upload — **only the master** (the clips stay original resolution, they are
+editing sources); combining it with `--skip-master` is rejected. The manifests carry the live
+metadata, the cut, and each item's **final** timestamps/title with **packaging fields present but
+empty** (titles/brief, filled by the Step 5 AI packaging). An **un-rendered item fails the export**
+with a clear list by default (export packages existing deliverables); **`--render-missing`** renders
+the missing items first (reusing the render job) and then packages. The whole package is **zipped**
+for the UI download; the CLI (`primocut export <video_id> --cut <id>`) runs **inline** and prints the
+folder path. See the [2026-07-20 export decision](#2026-07-20--phase-3-export-package-bundle-timestamped-history-concat-copy-master-master-only-upscale-fail-on-unrendered).
+
+**AI packaging (Step — in place), and the audience-asked signal.** The Cut room's **Packaging kit**
+(read-only in Step 1) now generates, **per clip** and **opt-in** (guideline 9), driven by the LIVE's
+project Phase 2 patterns. The deterministic input (`metrics.packaging_signals`, **no LLM**) re-reads the
+niche under **three lenses**: **differentials** (the Wilson-gated `metrics.patterns`, reused verbatim so
+packaging never disagrees with the niche view), **conventions** (booleans near-universal across the whole
+mature niche — a requirement, high in both groups so the differential guard drops them — never
+double-reported as a differential), and **carries-value** (recurring `title_llm.person_names`, the *name
+that carries*, guarded by a min-videos **and** min-lift floor — the never-invent rule for non-boolean
+values), plus real outlier **examples** (titles/attributes cited by video id) and a `flat` flag. **Titles**
+are one forced-tool pass per clip proposing **K** candidates (default 5, selectable), each citing which
+measured patterns it applies by a short id (`D#/C#/V#`); a citation that resolves to no measured pattern is
+**dropped in code** and `length_chars` is recomputed, never trusted. The **thumbnail brief** is a
+structured spec (composition/text/colours/graphics + references clamped to real outlier ids) — **no image
+generation**. **Frames** are extracted **100 % by FFmpeg** (`render.frames`: scene detection then even
+sampling to the requested count, default 3, selectable, pay-once by presence, **no LLM anywhere**); a
+**separate, explicit** opt-in **vision** pass (`rank_frames`) scores them against the brief and returns a
+frame **index** resolved/clamped to a real file (the golden rule, applied to stills). Every pass is
+**paid once** per clip by a content hash over the clip + the niche patterns, isolated per item (a failed
+clip never wastes the others), and **regenerated only on request**. Persistence is `cut_packaging`
+(`cut_item_id` + kind, cascading with the item); the results flow into the export **manifest**
+(`items[].packaging`) and the candidate frames are **copied** into the bundle under `NNN-frames/`.
+**Degradation, never invention**: a project with insufficient patterns generates in a **generic** mode with
+a warning; a **flat** niche (like *Cortes do MBL*) yields an honest brief that says packaging is not the
+lever. The **audience-asked** signal the decision bench reserved is now filled: one **cheap, cached-per-live**
+LLM pass (`match_live_audience`) matches the niche's synthesised audience requests to the live's topics,
+clamping every match to a real topic id, storing it in `live_audience_match`, and **degrading silently to
+an empty match — with no LLM call — when the niche has no comment syntheses**. See the
+[2026-07-21 packaging decision](#2026-07-21--phase-3-ai-packaging-per-clip-three-pattern-lenses-deterministic-frames-cached-audience-match).
+
 The pipeline runs, in order: **audio (yt-dlp → FFmpeg 16 kHz mono) → chat replay (optional)
 → transcription (faster-whisper `large-v3-turbo`, GPU) → analysis (LLM, macro topics)**.
 
@@ -216,11 +309,13 @@ sudo apt update && sudo apt install -y ffmpeg
 primocut doctor
 ```
 
-Validates **GPU/CUDA (WSL2), FFmpeg, yt-dlp, the selected provider's key, the provider SDK,
+Validates **GPU/CUDA (WSL2), FFmpeg, NVENC (`h264_nvenc`, via a real trivial encode — the default
+clip-render encoder), yt-dlp, the selected provider's key, the provider SDK,
 the YouTube Data API key (a real 1-unit call), Redis and the database**, and prints the fix
 command for each pending item. Exits with code `1` while there are pending items. The YouTube
 check fails when `PRIMOCUT_YOUTUBE_API_KEY` is unset (it is a Phase 2 requirement, like the
-LLM provider key).
+LLM provider key). The **WhisperX align venv** is an optional Phase 3 capability: it is checked
+only when `PRIMOCUT_ALIGN_PYTHON` is set, and its absence is a **warning** (does not fail the run).
 
 ### 2.4 CLI: `run` and `models`
 
@@ -466,6 +561,20 @@ pytest tests/test_report_markdown.py -v       # report
 pytest tests/test_transcription_engine.py -v  # transcription interface
 pytest tests/test_downloaders.py -v           # mocked yt-dlp/chat
 pytest tests/test_pipeline.py -v              # end-to-end with fakes
+pytest tests/test_cuts_repo.py -v             # decision bench DAO (triage, cuts, items)
+pytest tests/test_cuts_api.py -v              # cut room endpoints (bench, reorder, no render)
+pytest tests/test_render.py -v                # clip render primitives + job (yt-dlp/FFmpeg faked)
+pytest tests/test_clips_api.py -v             # render trigger, clip list/download/delete
+pytest tests/test_align.py -v                 # surgical WhisperX refinement (engine faked)
+pytest tests/test_export.py -v                # cut export bundle (FFmpeg faked)
+pytest tests/test_export_api.py -v            # export endpoints (enqueue, status, download)
+pytest tests/test_packaging_signals.py -v     # the 3-lens packaging input (no LLM)
+pytest tests/test_packaging_prompts.py -v     # prompt builders + tool schemas
+pytest tests/test_frames.py -v                # deterministic frame extraction (no LLM)
+pytest tests/test_packaging_repo.py -v        # cut_packaging + audience-match DAO
+pytest tests/test_packaging_generate.py -v    # title/brief/rank/audience passes (LLM faked)
+pytest tests/test_packaging_jobs.py -v        # packaging worker jobs (LLM faked)
+pytest tests/test_packaging_api.py -v         # packaging endpoints + bench integration
 ```
 
 The suite also covers (Phase 1): migrations/DAO, job state transitions, **idempotent
@@ -501,7 +610,125 @@ re-read), **`regenerate` rejected for the packaging kinds**, **refusing to synth
 nothing collected** (no LLM call), the **model override**, the **golden rule for quotes** (an
 out-of-range `example_index` clamps to a real comment), the **project-scoped request
 aggregation** (spelling variants merge; another project never leaks in), and — the cost guard —
-**a full cycle over a 10x outlier collecting comments while writing no synthesis row**.
+**a full cycle over a 10x outlier collecting comments while writing no synthesis row**. Phase 3
+cut room (`test_cuts_repo.py` + `test_cuts_api.py`, pure SQLite): **CRUD of cuts**, **lazy default
+`Cut 1`**, **transactional reorder** (a non-permutation is rejected and changes nothing) and item
+renumbering, **topic vs manual item** with **range validation** (end > start, within the live),
+**idempotent topic add**, **triage persistence across sessions** and the **4-precedence derived
+state** with **`in` winning over triage** and **never written to triage**, **triage shared per-live
+while `in` is per-active-cut** (a topic `in` cut A reads `maybe` in cut B), the **`SET NULL`
+degradation** (regenerating topics keeps the composed item as a preserved manual range while its
+triage cascades away), the **bench payload's bounded query count** (no N+1 as topics grow), the
+**leakage guard** on every cut route, and — the decision-bench cost guard — **the bench flow itself
+dispatches no rendering job** (only the explicit Render endpoint does). Phase 3 rendering
+(`test_render.py` + `test_clips_api.py`, yt-dlp/FFmpeg faked, no network/GPU): the **section margins**
+and clamps, the **exact re-encode command** and its frame-exact `-ss`/`-t` timestamps (offset from
+the probed `start_time`), the **NVENC→libx264 fallback**, **slug/filename** and **NNN order**, the
+**pay-once cache by parameters** (a second identical render re-encodes nothing; `regenerate` forces
+it), the **reorder rename without re-encoding**, **per-item failure isolation** (one item errors,
+the others still render), the **ephemeral section temp dir** discarded, **clips persisting under
+`clips_dir` (never in a temp dir)** and **explicit deletion** (a clip delete, an item removal, or
+`delete_video` removing the whole clips dir); over HTTP: the **background render enqueue** (all vs
+one item), the **clip list/status**, the **download**, the **delete removing row + file**, the
+**clip state folded into the bench**, and the **leakage guard** on every render route. Phase 3
+surgical alignment (`test_align.py`, WhisperX engine faked, no torch/GPU/network): **snap to the
+nearest word edges** and the **tolerance clamp** (a farther edge keeps the original — never
+mid-word), the **inversion guard**, the **window extracted being only the item's window** (mapped
+back with a non-zero section origin, never the whole section), the **GPU lock acquired and
+released** (also on the failure path), the **silent fallback** on unavailable / **timeout** / error,
+the **`aligning` state landing between `downloading_section` and `cutting`** and the **refined bounds
+driving the cut**, the **align venv absence skipping alignment entirely**, and the **cache key
+folding in the tolerance** (a changed tolerance re-renders; the same one is a hit). The doctor tests
+cover the **WhisperX check as a warning** (unconfigured/missing/present-but-not-importable stay
+`warn`, never failing the run; installed → ok). Phase 3 export (`test_export.py` +
+`test_export_api.py`, FFmpeg faked): the **package structure** (timestamped dir, clips + SRT +
+master + manifests, no stray `concat.txt`), **order/naming** (`NNN-slug`, the manual range's neutral
+slug), the **master concat STREAM COPY** command (no `-c:v`/`h264_nvenc`) and the **1440p NVENC
+`scale=-2:1440` upscale** command, the **SRT offsets** for a topic and a **manual range** and its use
+of the **refined `render_start_s`** when a WhisperX shift moved the cut, the **manifests** (live/cut
+metadata, final timestamps, **packaging present-but-empty**), **`--skip-master`** (no FFmpeg call, a
+null master in the manifest), the **upscale∧skip-master rejection**, **copies-never-moves** (originals
+under `clips_dir` intact), the **zip mirroring the package**, and the **un-rendered behavior** (fail
+by default listing the items; **`render_missing`** renders then packages); over HTTP: the **background
+enqueue** with the queued row folded into the bench, the **zip download** (and its 404 before ready),
+and the **leakage guard** on every export route. Phase 3 AI packaging (LLM faked, no network/GPU):
+the **three-lens input** (`test_packaging_signals.py`) — a **differential** reported, a near-universal
+boolean surfacing as a **convention** and never as a differential, the **name that carries** reported while
+a single-video value is withheld (the never-invent floor), real **examples** with attributes, the **flat**
+and **no-enrichment** niches degrading to generic; the **prompt builders** (`test_packaging_prompts.py`)
+carrying the patterns/examples/K and the flat-niche instruction; **frame extraction**
+(`test_frames.py`) — **no LLM in the module**, scene-then-sample fill to the count, pay-once, the exact
+FFmpeg commands; the **generation core** (`test_packaging_generate.py`) — **K respected**, a **bogus pattern
+citation dropped** (none invented), the **structured brief** with references clamped to real examples, frame
+ranking **resolving/clamping indices** to real files, and the audience match **clamping topic ids** +
+**calling no LLM without requests**; the **worker jobs** (`test_packaging_jobs.py`) — the prompt built from
+the **LIVE project's** patterns (a channel in two projects → the live project's, never the other's),
+**pay-once then regenerate**, **per-item isolation**, **frame extraction taking no LLM**, **ranking behind an
+explicit trigger**, and the audience match **cached per live** + **degrading with no syntheses**; over HTTP
+(`test_packaging_api.py`) — each action's **background enqueue**, the **context** endpoint, the bench folding
+in **per-item packaging + the filled `audience_asked` slot**, a **served frame** (with the path-traversal
+guard), and the **leakage guard** on every packaging route. The export tests also cover the **manifest
+incorporating** the generated titles/brief and the **candidate frames copied** into the bundle.
+
+### 2.11 Cut room (Phase 3) — manual smoke test
+
+The bench UI has no automated coverage (the suite is Python-only). Build the UI and start
+`primocut serve`, then open a live's Cut room (`#/p/{pid}/lives/{lid}`) once it has topics:
+
+1. **Bench + triage.** The middle column lists the topics with the counter *"X in · Y maybe ·
+   Z open"*. Clicking a topic's **icon** cycles `open → in → maybe → discarded → open`: `in`
+   makes it appear in the right-hand **Composition**, `discarded` dims and strikes it through.
+   Clicking a topic's **body** seeks the player and highlights the transcript line. Reload the
+   page — the triage survives (it is persisted per live).
+2. **Composition.** Marked topics stack in order; drag to reorder, `✕` to remove, and
+   **＋ Add manual range** (`M:SS → M:SS`) adds a range item. The total duration updates.
+3. **Preview cut.** The **Source | Preview cut** toggle switches the player. Preview shows a
+   segmented scrub (one segment per item) and **▶ Play cut** walks the items in order by seek,
+   with a *"item N →"* overlay during the buffering gap. Clicking a segment jumps to that item.
+4. **Cuts.** **＋ New cut** creates a second cut; the selector switches the active one. A topic
+   `in` cut A but only `maybe` globally reads `maybe` when cut B is active (triage is per live,
+   membership is per cut).
+5. **Rendering (needs `primocut worker` + Redis; a GPU for real NVENC).** Click **Render N
+   clips** → each composition item shows a live status chip (`queued → downloading → cutting →
+   ✓ done`) advancing under the 2 s poll while you **keep triaging** (it is a background job, not a
+   blocking screen). A **done** row offers **↓ download** (the MP4), **↻ re-render** and **🗑 delete
+   clip**. Re-clicking Render with nothing changed re-encodes nothing (the worker log says
+   `0 rendered, N cached`); reordering then rendering only renames files. The clips land under
+   `PRIMOCUT_CLIPS_DIR/<video_id>/<cut_id>/NNN-slug.mp4` and are **not** cleaned up automatically.
+   To see the failure path, point at a bad state (e.g. `PRIMOCUT_RENDER_ENCODER` to a nonexistent
+   encoder): the row must show **render failed** (red) with a **↻ retry**, and the other items must
+   still render. Run `primocut doctor` to confirm the **NVENC** check (it falls back to libx264 when
+   NVENC is unavailable).
+6. **Surgical WhisperX alignment (optional).** Create the isolated align venv and point the worker
+   at it: `python3 -m venv .venv-align && /usr/bin/python3 -m pip --python .venv-align/bin/python
+   install -e '.[align]'`, then set `PRIMOCUT_ALIGN_PYTHON=.venv-align/bin/python` before starting
+   `primocut worker`. Now a render inserts an **`aligning`** chip between *downloading* and *cutting*,
+   and the cut boundaries snap to the nearest word edge within ±3 s. With the variable **unset** the
+   step is skipped entirely (original boundaries), proving the fallback; `primocut doctor` shows the
+   **WhisperX align** row as **WARN** when unconfigured. Never install the `align` extra into the
+   worker venv — it conflicts with faster-whisper.
+7. **Export (needs `primocut worker` + Redis).** With items rendered, **Export package** → the
+   button shows *Exporting…* and, under the 2 s poll, a **↓ Download zip** appears when the bundle is
+   ready. Unzip it: `NNN-slug.mp4` (in composition order) + `NNN-slug.srt`, a `master.mp4` and
+   `manifest.md`/`manifest.json`. The package lands under
+   `PRIMOCUT_EXPORTS_DIR/<video_id>/<cut_id>/<cut-slug>-<stamp>/` (a **new timestamped** dir each time;
+   the clips under `PRIMOCUT_CLIPS_DIR` are **copied, never moved**). Tick **Upscale master to 1440p**
+   to re-encode only the master (NVENC). The CLI equivalent prints the folder path:
+   `primocut export <video_id> --cut <id> [--render-missing] [--skip-master] [--upscale-1440p]`.
+   Export with an un-rendered item **fails** with a clear list unless you pass `--render-missing`
+   (UI: the button already renders missing items first). The `master.mp4` is a **concat stream copy**
+   (seconds, no re-encode) unless upscaling.
+8. **Packaging kit (AI packaging — opt-in, needs `primocut worker` + a provider key).** Collapsed by
+   default; expanding shows the generation actions on top and the niche's read-only patterns / reference
+   outliers below. With the niche enriched (Niche › Patterns), set **K** and click **✨ Titles**: each clip's
+   composition row grows a title list, every proposal tagged with the pattern ids (`D#/C#/V#`) it applies.
+   **✨ Thumbnail brief** adds a one-line brief per clip (no image). **Extract frames** (free — FFmpeg) drops
+   candidate stills under `PRIMOCUT_CLIPS_DIR/<vid>/<cut>/frames/`; **✨ Rank frames** highlights the best.
+   Re-clicking a generated pass charges nothing (pay-once); the export manifest then carries the titles/brief
+   and the copied frames. On a **flat** niche the kit says packaging is not the lever; on a niche with no
+   patterns it degrades to a generic mode with a warning (never invents one). **✨ Match to topics** (under
+   *The audience asked for*) tags each topic the niche explicitly asked for with a **👥 asked** pill on the
+   bench; with no comment syntheses it stays empty and spends nothing.
 
 ---
 
@@ -534,7 +761,18 @@ aggregation** (spelling variants merge; another project never leaks in), and —
 
 ### Database (SQLite)
 
-Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations`, the Phase 2
+Tables: `videos, jobs, transcripts, chat_signals, topics, schema_migrations`, the Phase 3
+assisted-cutting trio `topic_triage` (per-live topic opinion, unique per `(video_id, topic_id)`,
+`topic_id` CASCADE — an opinion dies with its topic), `cuts` (ordered compositions, N per live)
+and `cut_items` (a cut's ordered slots; `topic_id` **nullable and `ON DELETE SET NULL`** so a
+composed topic item degrades into a preserved manual range instead of vanishing when topics are
+regenerated) and `clips` (the Step 2 render output, one MP4 per `cut_item`, unique
+`cut_item_id` **`ON DELETE CASCADE`** — removing the item takes its clip row, the route unlinks the
+file; carries the render state, the `params_hash` pay-once key and the `rel_path` deliverable), the Phase 3
+AI-packaging pair `cut_packaging` (per-clip titles/thumb_brief/frame_ranking, unique per
+`(cut_item_id, kind)` **`ON DELETE CASCADE`** — content-hash gated, `state`/`error` like the enrichment rows;
+the frame JPEGs live on disk, not here) and `live_audience_match` (one row per live, `video_id` PK
+**`ON DELETE CASCADE`** — the cached audience→topic match that fills the bench's `audience_asked` slot), the Phase 2
 foundation `projects, competitor_channels, project_channels, competitor_videos`, the
 collection time series `channel_snapshots, video_snapshots, packaging_changes`, the append-only
 Radar log `events`, the metrics
@@ -655,6 +893,25 @@ Phase 2 Radar (the append-only event log; reads are bounded and index-backed):
 | GET | `/api/activity` `?limit=&before_id=` | full paginated log (`next_before_id` cursor) + `quota_units` accounting summed from `cycle_done` events |
 | POST | `/api/events/seen` `{ids?, until?}` | mark niche events seen by id set and/or up to a timestamp; ops events are never marked (they resolve, not dismiss) |
 
+Phase 3 cut room (the decision bench + rendering; project-scoped under the live, with the same
+leakage guard):
+
+| Method | Route | Action |
+|---|---|---|
+| GET | `/api/projects/{pid}/lives/{lid}/cuts` | list the live's cuts (id, name, status, item_count, total_duration_s); **creates the default `Cut 1` lazily** |
+| POST | `…/lives/{lid}/cuts` `{name?}` | create a cut → 201 |
+| GET | `…/lives/{lid}/cuts/{cid}` | **bench payload**: the cut's ordered items + every topic's derived state and signals, assembled without an N+1 |
+| PATCH | `…/lives/{lid}/cuts/{cid}` `{name?,status?}` | rename / restate a cut |
+| DELETE | `…/lives/{lid}/cuts/{cid}` | delete a cut and its items (204); a next GET recreates an empty `Cut 1` if it was the last |
+| POST | `…/cuts/{cid}/items` `{topic_id}` \| `{start_s,end_s}` | append a topic item (range snapshotted; adding a topic already in the cut is idempotent) or a manual range (400 on an invalid range) → returns the fresh bench |
+| DELETE | `…/cuts/{cid}/items/{iid}` | remove an item and renumber; returns the fresh bench |
+| PATCH | `…/cuts/{cid}/items` `{item_ids:[…]}` | **transactional reorder**; 400 unless `item_ids` is an exact permutation of the cut's items |
+| PATCH | `…/lives/{lid}/topics/{tid}/triage` `{state}` | write triage: `maybe`/`discarded` upsert, `open` clears; `in`/unknown → 400 (`in` lives only in `cut_items`) |
+| POST | `…/cuts/{cid}/render` `{item_id?,regenerate?,fast_copy?}` | **background** render of every item (or one) → 202 `{queued, rq_job_id}`; pay-once by parameters unless `regenerate` |
+| GET | `…/cuts/{cid}/clips` | the cut's clips with per-item render state (+ a `download_url` once `done`) |
+| GET | `…/cuts/{cid}/clips/{clip_id}/download` | the rendered MP4 (`FileResponse`); 404 unless `done` |
+| DELETE | `…/cuts/{cid}/clips/{clip_id}` | explicit clip delete → 204 (removes the row **and** the file) |
+
 ### Golden rule — timestamps are never invented
 
 The LLM receives **indexed** segments (`[i] M:SS text`) and returns only
@@ -699,6 +956,18 @@ quoted word on screen is a word the audience actually wrote.
 - Snapshot collection (cycle job + scheduler): `src/primocut/worker/snapshot_jobs.py`,
   `src/primocut/worker/scheduler.py`
 - Projects/competitors API router: `src/primocut/api/projects.py`
+- Cut room (Phase 3 decision bench): DAO `src/primocut/db/cuts.py` (cuts/items/triage, transactional
+  reorder, derived-state helpers), router `src/primocut/api/cuts.py`, bench payload assembled in
+  `api/service.py` (`bench_payload`/`list_cuts_payload`). Models `TopicTriageRow`/`CutRow`/`CutItemRow`
+  in `db/models.py`. Frontend: `views/CutRoom.svelte` (three columns + virtual preview) over the
+  extended `components/Player.svelte` (`play`/`pause`/`getTime`/`onState` for the preview driver).
+- Clip rendering (Phase 3 Step 2): the render primitives (fakeable subprocess seams) in
+  `src/primocut/render/section.py` (yt-dlp `--download-sections`) and `render/encode.py` (ffprobe
+  offset, `build_encode_cmd`, NVENC→libx264 fallback, slug/filename); the background job with
+  per-item isolation + the pay-once cache in `worker/render_jobs.py`, enqueued by
+  `worker/queue.py:enqueue_render`; DAO `db/clips.py` (`ClipRow`, `params_hash`, state helpers);
+  render/download/delete routes in `api/cuts.py`; the clip state folded into the bench in
+  `api/service.py`; the NVENC diagnostic in `doctor.py:check_nvenc`.
 - Frontend (Svelte SPA): `frontend/src/` — hash routing + sidebar in `App.svelte`, the single
   API client in `lib/api.js`, formatting helpers in `lib/format.js`, one global stylesheet
   `app.css` (design tokens; components carry no `<style>` blocks). Phase 2 UI:
@@ -742,6 +1011,10 @@ and covered by tests**.
 | **Analysis (topics)** | Permanent failure on a window (credit, auth, no tool use) | **Ends the stage keeping whatever was already collected** (partial); the pipeline degrades the report + warning |
 | **Analysis (topics)** | LLM response off-format | Tolerant parsing: normalizes an indexed dict, **ignores malformed items with a warning** (never tears down the stage) |
 | **Analysis (topics)** | LLM returns out-of-range indices | `resolve_span` **clamps** to the real limits and sorts them if reversed |
+| **Clip render** | One item's section download / encode fails | **Per-item isolation**: logged, the clip row is marked `state="error"` with the message (shown on the row), and the batch renders the rest — one bad clip never wastes the others |
+| **Clip render** | NVENC (`h264_nvenc`) unavailable/fails | **Falls back to `libx264`** for that clip (slower software encode) and records the warning; the deliverable still comes out |
+| **Clip render** | Same item, same parameters (range + padding + encode profile) | **Pay-once cache**: skipped (no re-encode); a pure reorder only renames the file. `regenerate` forces it |
+| **Clip render** | The section download (ephemeral temp dir) | Discarded when the item finishes, always — the clip MP4 is the only retained artifact |
 | **Report** | Some section has no data | Renders "No topic identified" and/or "No chat replay"; never fails |
 | **Report** | The run had degradations | A **"⚠️ Degraded run"** section right after the metadata, listing what failed/was skipped |
 | **Channel backfill** | YouTube API error (quota/auth/network) | **Degrades**: the channel is marked `backfill_state="error"` with the message logged; the job returns instead of crashing the worker (per-channel isolation) |
@@ -841,6 +1114,10 @@ The analysis is provider-agnostic (`SelectionLLM` interface). Automatic selectio
 | `PRIMOCUT_PACKAGING_IMPACT_WINDOW_DAYS` | Before/after window for packaging impact (default 7) |
 | `PRIMOCUT_PATTERN_MIN_OCCURRENCE` / `PRIMOCUT_PATTERN_OUTLIER_BRACKET` | Pattern minimum-occurrence guard + outlier threshold (the latter is also the batch-enrichment target) |
 | `PRIMOCUT_ENRICH_TITLE_MODEL` / `PRIMOCUT_ENRICH_VISION_MODEL` / `PRIMOCUT_ENRICH_COMMENTS_MODEL` | Model override for the opt-in enrichment passes. **Empty (default) = the selected provider's configured model**; a model id is provider-specific, and the vision one must support image input |
+| `PRIMOCUT_CLIPS_DIR` | Base dir for the rendered clips (default `./clips`). Deliverables under `<clips_dir>/<video_id>/<cut_id>/NNN-slug.mp4`; never auto-cleaned |
+| `PRIMOCUT_RENDER_SECTION_MARGIN_S` | Margin per side of the downloaded section (default 15 s), covering yt-dlp's keyframe cut so the exact range is inside it |
+| `PRIMOCUT_RENDER_ENCODER` | Default fine-cut encoder: `nvenc` (default, falls back to libx264) \| `libx264`. `-c copy` is opt-in per render via the request's `fast_copy` |
+| `PRIMOCUT_RENDER_NVENC_CQ` / `PRIMOCUT_RENDER_X264_CRF` / `PRIMOCUT_RENDER_AUDIO_BITRATE` | Encode quality knobs (NVENC constant-quality, libx264 CRF, AAC bitrate) |
 
 ---
 
@@ -871,9 +1148,38 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
   *says*. Not built: the pipeline is keyed to the `videos` table (the live-report entity), so it
   needs that split resolved first, and each outlier costs real GPU minutes — it waits for a
   demand signal from the niche views now shipped.
-- **Phase 3 — Assisted cutting (next).** Automatic clip generation with FFmpeg; evaluate
-  **WhisperX** (word-level timestamps + diarization). The `TranscriptionEngine` interface
-  exists precisely so WhisperX can be plugged in without touching the rest of the system.
+- **Phase 3 — Assisted cutting ✅.** The Cut room is a **decision bench**. Scope
+  approved 2026-07-19 (see the [decision log](#2026-07-19--phase-3-scoped-the-marking-layer-returns-as-two-concepts)),
+  delivered in steps (all done):
+  1. **Decision bench + virtual preview ✅ (done).** Triage a live's topics into persistent
+     states (`topic_triage`), compose ordered cuts (`cuts` + `cut_items`, a cut = an ordered
+     selection of N items, each a topic or a manual range), and preview the active cut in the
+     embedded player by seek only — **no download, no encode**.
+  2. **Rendering ✅ (done).** Per item: MP4 **H.264 + AAC, original resolution**, downloaded by
+     **section** (yt-dlp `--download-sections`, 15 s margin) into an ephemeral temp dir and cut with
+     FFmpeg — **NVENC re-encode by default** for exact boundaries, `libx264` fallback, opt-in
+     `--fast-copy`. Background job on the existing queue/polling, **per-item isolation**, **pay-once
+     by parameters**, clips as **deliverables** under `PRIMOCUT_CLIPS_DIR`. See the
+     [2026-07-20 decision](#2026-07-20--phase-3-rendering-nvenc-re-encode-by-default-clips-as-deliverables).
+     The **surgical WhisperX** word-accurate refinement (±3 s tolerance, snap to word edges, silent
+     fallback, in an **isolated align venv**, diarization deferred) is now **delivered** — see the
+     [2026-07-20 alignment decision](#2026-07-20--phase-3-rendering-surgical-whisperx-boundary-refinement-isolated-venv-silent-fallback).
+     The `TranscriptionEngine` interface (whose second implementation is `WhisperXEngine`) is exactly
+     what let it plug in without touching the rest of the system. Optional `--upscale 1440p` on export
+     remains **deferred to a follow-up**.
+  3. **Export ✅ (done).** A deliverable bundle (clips copied in order + per-clip SRT + concat-copy
+     master + manifests, optional 1440p NVENC master upscale), a timestamped dir kept as history,
+     zipped for the UI. See the
+     [2026-07-20 export decision](#2026-07-20--phase-3-export-package-bundle-timestamped-history-concat-copy-master-master-only-upscale-fail-on-unrendered).
+  4. **AI packaging ✅ (done).** Per clip, from the LIVE's project Phase 2 patterns under three lenses
+     (differential / convention / carries-value) + real outlier examples: **K** titles (default 5,
+     selectable) citing the measured patterns they apply, a structured thumbnail brief (no image), and
+     **deterministic FFmpeg** candidate frames (default 3, selectable) with a separate opt-in vision
+     ranking. Plus the opt-in, cached-per-live **audience-asked** match. All opt-in, paid once,
+     degrading (never inventing) on thin/flat niches. See the
+     [2026-07-21 packaging decision](#2026-07-21--phase-3-ai-packaging-per-clip-three-pattern-lenses-deterministic-frames-cached-audience-match).
+     The **CapCut hand-off** is the manual downstream use of the CapCut-ready bundle (no dedicated
+     integration needed).
 - **Phase 4 — Publishing.** AI titles/descriptions, vertical format, upload via the YouTube
   API, multi-user.
 
@@ -883,6 +1189,210 @@ Aligned with the product roadmap ([`PRIMOCUT.md`](./PRIMOCUT.md) §Roadmap).
 
 The most important section. **Never overwrite or delete an entry**: a reverted decision gets a
 **new** entry pointing to the reversal. Dates in ISO (`YYYY-MM-DD`).
+
+### 2026-07-21 · Phase 3 AI packaging: per-clip, three pattern lenses, deterministic frames, cached audience match
+**Type:** technical + product. **Status:** implemented (Phase 3 packaging step — closes Phase 3). Builds on
+the Phase 2 patterns and the Phase 3 export.
+
+**Context.** Steps 1–4 gave the user a decision bench, per-item rendering and a deliverable export whose
+manifest carried **empty** packaging fields. This step fills them: per-clip AI packaging driven by the
+niche's evidence, so a clip's title/thumbnail decisions are grounded in what actually works in the niche —
+not intuition — while never fabricating a pattern the data does not support.
+
+**Decisions.**
+- **Per CLIP, not per cut.** The task sketched `cut_packaging(cut_id, …)`, but a clip is a video of its own
+  and the export manifest already carries per-item packaging, so the row is keyed by **`cut_item_id`** (kind
+  ∈ `title|thumb_brief|frame_ranking`, unique per pair, `ON DELETE CASCADE` with the item). The UI trigger
+  operates on the whole cut (one LLM pass per clip, isolated per item like the enrichment batch); the results
+  are stored and shown per clip. Confirmed with the user before implementing.
+- **Three pattern lenses, reusing Phase 2.** The packaging input (`metrics.packaging_signals`, deterministic,
+  no LLM) re-presents the project's patterns as **differentials** (the existing Wilson-gated
+  `metrics.patterns`, verbatim — packaging can never disagree with the niche dashboard), **conventions**
+  (booleans ≥ `packaging_convention_floor` across the whole mature niche — table-stakes, high in both groups
+  so they never separate; excluded from the differential set to avoid double-reporting) and **carries-value**
+  (recurring `title_llm.person_names` — the *name that carries* — guarded by a min-videos **and** min-lift
+  floor, the never-invent rule for non-boolean values). A `flat` niche (nothing separates, nothing carries)
+  is reported honestly so the brief says packaging is not the lever rather than inventing a differential.
+- **Never invent a pattern (the golden rule, generalised).** Titles cite measured patterns by a short id
+  (`D#/C#/V#`); a citation that resolves to no measured pattern is **dropped in code**, exactly as
+  `resolve_span` refuses a fabricated timestamp and the comment synthesis refuses a fabricated quote. K
+  (default 5) is enforced in code; `length_chars` is recomputed, never trusted.
+- **Frames are FFmpeg-only; ranking is a separate opt-in.** Extraction (`render.frames`: scene detection +
+  even sampling to the requested count) has **no LLM in the module at all** (a test asserts it) and is
+  pay-once by presence. Ranking the frames against the brief is a **separate, explicitly triggered** vision
+  pass that returns a frame **index** clamped to a real file — extraction never triggers it.
+- **The thumbnail brief is a spec, not an image.** Structured composition/text/colours/graphics + references
+  to real outliers — no image generation anywhere, by decision (the tool is a clip editor's brief for a human
+  designer).
+- **Audience match: cheap, cached per live, silent degradation.** One forced-tool pass matches the niche's
+  synthesised audience requests to the live's topics, cached in `live_audience_match` by a hash over the
+  topics + the request set, clamping every match to a real topic id. With **no** syntheses it returns an
+  empty match **without calling the model** — the reserved `audience_asked` bench slot simply stays empty.
+- **New tables via `create_all`, not a migration.** `cut_packaging` and `live_audience_match` are whole new
+  tables (the NNN_*.sql deltas are reserved for ALTER/DROP on existing tables).
+
+**Consequences.** Packaging is opt-in and paid once; the export manifest gains real titles/brief/frames
+(candidate stills copied into the bundle under `NNN-frames/`); the bench's audience-asked tag lights up. This
+**closes Phase 3** — the CapCut hand-off is the manual downstream use of the CapCut-ready bundle, needing no
+dedicated integration.
+
+### 2026-07-20 · Phase 3 export: package bundle (timestamped history, concat-copy master, master-only upscale, fail on unrendered)
+**Type:** technical + product. **Status:** implemented (Phase 3 export step). Builds on the
+[2026-07-20 rendering decision](#2026-07-20--phase-3-rendering-nvenc-re-encode-by-default-clips-as-deliverables):
+rendering produces one MP4 per item; export **assembles a whole cut** into a hand-off bundle. The
+choices:
+
+- **Package layout.** A **new dir per export**, `exports/<video_id>/<cut_id>/<cut-slug>-<stamp>/`,
+  kept **separate** from `clips_dir` and tracked by an `exports` row (one per cut, the latest). It
+  holds `NNN-slug.mp4` (composition order) + `NNN-slug.srt`, a `master.mp4`, and
+  `manifest.md`/`manifest.json`. Export **copies the clips, never moves them** — the originals under
+  `clips_dir` are never mutated. History is **kept** (timestamped dirs) rather than overwriting the
+  latest; like clips, exports are never auto-swept (only a live delete removes `exports/<video_id>/`).
+- **Master = concat stream copy by default.** Because every clip shares the render profile, the
+  master is a concat-demuxer `-c copy` (**no re-encode**, seconds). `--skip-master` opts out.
+- **`--upscale-1440p` re-encodes only the master** (NVENC `scale=-2:1440`, libx264 fallback) so
+  YouTube assigns better codecs to the ≥1440p upload; the individual clips stay original resolution
+  (they are editing sources). Combining it with `--skip-master` is rejected (nothing to upscale).
+- **SRT offsets to the effective bounds.** Each clip's SRT is derived from the existing transcript,
+  each cue shifted to the clip's own base. The offset uses the **actually encoded** window, so the
+  clip row now persists `render_start_s`/`render_end_s` (the **WhisperX-refined** bounds when
+  alignment ran; equal to the requested bounds otherwise). Same treatment for a manual range.
+- **Un-rendered items fail loudly by default.** Export packages existing deliverables, so a missing
+  clip **aborts** with a clear list rather than silently kicking off heavy work; **`--render-missing`**
+  is the opt-in that renders the missing items first (reusing the render job) and then packages.
+- **Manifests carry empty packaging slots.** The per-item `packaging` (titles/thumbnail brief) fields
+  exist now and stay empty until the Step 5 AI packaging fills them — no schema churn later.
+- **Background for the UI, inline for the CLI.** The Cut room's **Export** button enqueues a job and
+  polls for the zip download; `primocut export <video_id> --cut <id>` runs inline and prints the
+  folder path. The zip is always produced for the browser download.
+
+### 2026-07-20 · Phase 3 rendering: surgical WhisperX boundary refinement (isolated venv, silent fallback)
+**Type:** technical. **Status:** implemented (Phase 3 Step 2 follow-up). Completes the WhisperX
+pass **deferred** in the [2026-07-20 rendering decision](#2026-07-20--phase-3-rendering-nvenc-re-encode-by-default-clips-as-deliverables).
+**Decision:** add `WhisperXEngine` as the **second `TranscriptionEngine` implementation** (the reason
+that interface has existed since Phase 0) and use it **surgically** during a render to snap each cut
+item's boundaries to the nearest word/sentence edge. The choices:
+
+- **Surgical, never wholesale.** A new `aligning` state sits between `downloading_section` and
+  `cutting`. It extracts audio for **only the item's own window** (`[start−tol, end+tol]`, 16 kHz
+  mono, `-vn`) **from the section already on disk** — the ±15 s margin yt-dlp fetched for the cut —
+  and runs wav2vec2 (PT-BR) alignment on that window alone. It **never re-downloads** and **never
+  re-transcribes the live**. The tolerance is kept ≤ the section margin so the window is always
+  inside the fetched section.
+- **±3 s tolerance, snap to word edges.** `start` moves to the nearest **word start**, `end` to the
+  nearest **word end**, each only within `PRIMOCUT_ALIGN_TOLERANCE_S` (default 3 s); a nearer edge
+  beyond the tolerance keeps the original timestamp. Snapping to word edges is what guarantees the
+  cut **never lands mid-word**; an inversion guard keeps the safe originals if a snap would cross.
+- **Silent fallback (improvement, never a blocker).** Alignment not configured, the subprocess
+  unavailable, a **timeout** (`PRIMOCUT_ALIGN_TIMEOUT_S`), or any error → the item keeps its original
+  `[start, end]`, logs, and renders. This is the "degrade, don't abort" contract (guideline #12).
+- **GPU lock.** The wav2vec2 inference holds the same distributed lock as transcription
+  (`primocut:gpu`), so it stays serialized on the 8 GB GPU. The lock wraps only the inference (the
+  ffmpeg window extraction is CPU).
+- **Dependency isolation (whisperx conflicts with the validated venv).** A real `pip --dry-run`
+  confirmed whisperx 3.8.6 would **downgrade `huggingface-hub` 1.23→0.36** and graft a **torch 2.8 /
+  pyannote 4 / torchcodec / triton** stack plus a fresh **CUDA 12.8** nvidia tree over the worker
+  venv — the last of which can shadow the cuBLAS/cuDNN that faster-whisper preloads. It did **not**
+  downgrade the validated `faster-whisper 1.2.1` (whisperx's floor is 1.2.0), so the forbidden action
+  was avoided, but grafting the stack was not acceptable. So alignment runs in a **separate venv**
+  (`.venv-align`, the `align` extra) and the render worker **shells out** to its interpreter
+  (`PRIMOCUT_ALIGN_PYTHON`) via `align_worker`, which returns word timestamps as JSON. This keeps the
+  worker venv byte-for-byte, gives the timeout a **killable subprocess**, and matches the existing
+  render "runner seam" (yt-dlp/FFmpeg are faked the same way). An `align` extra is provided for
+  `pip install -e '.[align]'` *into that venv*, never the worker venv.
+- **Cache.** `clips.params_hash` now folds in the **tolerance** (range + padding + profile +
+  tolerance): a new tolerance can move the exact cut points, so it re-renders; the same tolerance is
+  a cache hit. Whether alignment was actually available at runtime is environmental (like the
+  NVENC→libx264 fallback) and stays out of the key.
+- **`doctor`** gained a WhisperX check that runs **only when the align venv is configured** and is a
+  **warning, not an error** (absence never fails the run / flips the exit code) — `CheckResult` grew
+  a `warn` flag for this class of optional capability.
+
+**Deferred (documented extension point, not built):** **diarization**. pyannote's
+`DiarizationPipeline` is already pulled by the `align` extra, so a future step can assign a speaker
+per word inside `align_worker`; it is out of scope for boundary refinement and only marked as the
+plug-in point in `whisperx_engine.py`. The `--upscale 1440p` export flag also remains deferred.
+
+**Reason:** the phase promises *precise* clips; the re-encode already gives frame-exact boundaries at
+the item's snapshotted range, and this makes the range itself land on real speech edges rather than
+on an LLM's rounded topic timestamps — without ever paying to re-transcribe a live, and without
+risking the validated transcription environment.
+
+### 2026-07-20 · Phase 3 rendering: NVENC re-encode by default, clips as deliverables
+**Type:** technical + product. **Status:** implemented (Phase 3 Step 2).
+**Decision:** the Cut room's **Render** button dispatches a **background** job on the existing
+queue that renders **one MP4 per cut item** (H.264 + AAC, original resolution), with these choices:
+
+- **RE-ENCODE with NVENC (`h264_nvenc`) is the default**, not a stream copy. Only a real re-encode
+  yields **frame-exact** start/end boundaries; `-c copy` cuts at keyframes. NVENC (GPU) keeps it
+  fast; on an NVENC failure the job **falls back to `libx264`** (software, slower, warned), and
+  `--fast-copy` (`-c copy`, documented as keyframe-imprecise) is **opt-in per render**. The
+  intermediate is the **section only**: yt-dlp `--download-sections` fetches `[start−margin,
+  end+margin]` (default **15 s** margin — yt-dlp cuts at keyframes, the margin guarantees the exact
+  range is inside), into a **throwaway temp dir** discarded when the item finishes, exactly like the
+  audio. The section download does NOT force keyframes, so it preserves the original timestamps; the
+  trim offset inside it is `start − ffprobe(start_time)`.
+- **Clips are DELIVERABLES**, not ephemeral. They are written under
+  `PRIMOCUT_CLIPS_DIR/<video_id>/<cut_id>/NNN-slug.mp4` (NNN = composition position) and are **never
+  swept by any automatic cleanup** (contrast the audio's temp dir). They are removed **only** by an
+  explicit action: a clip delete, an item removal (its clip cascades and the route unlinks the
+  file), or deleting the live (its whole clips dir goes). **Pay-once by parameters** (range +
+  padding + encode profile, hashed): the same item re-rendered with the same parameters is skipped,
+  a pure reorder just renames the file, and **regeneration is explicit**.
+- **Per-item degradation:** one item's failure is isolated (logged, `state="error"` on the row,
+  surfaced in the UI) and never aborts the others — the same resilience contract as the enrichment
+  batch. Rendering runs in the **background** so the user keeps triaging; each item's status
+  (`queued → downloading_section → cutting → done | error`) advances in place under the existing 2 s
+  polling. `doctor` gained a **real** NVENC check (a trivial `h264_nvenc` encode — WSL2 exposes it
+  through the Windows driver, so it is verified, not assumed).
+
+**Deferred within Step 2:** the **surgical WhisperX** word-accurate boundary refinement (±3 s
+tolerance, `master.mp4`) and the `--upscale 1440p` export flag. Exact boundaries today come from the
+item's snapshotted `[start, end]` via the re-encode; the WhisperX pass is a later refinement that
+the `TranscriptionEngine` interface already accommodates.
+
+**Reason:** the phase's promise is *precise* clips; a keyframe stream copy cannot cut on the word,
+so a re-encode is the floor, and NVENC is what keeps a re-encode affordable on the RTX 3070 Ti. The
+deliverable/ephemeral split mirrors the audio decision (2026-07-13): expensive-to-produce, user-
+facing artifacts are permanent and explicitly managed; throwaway intermediates are not.
+
+### 2026-07-19 · Phase 3 scoped: the marking layer returns as two concepts
+**Type:** product + technical. **Status:** approved scope; Step 1 in implementation.
+**Decision:** open Phase 3 (assisted cutting) as the Cut room becoming a **decision bench**, built
+in steps — (1) the bench + a virtual preview, (2) per-item rendering (FFmpeg/NVENC + surgical
+WhisperX), (3) AI packaging from the niche patterns, (4) CapCut export. **Step 1 is the current
+work; the rest is scoped, not built.** Approved parameters for the later steps, recorded now so
+they are not relitigated: MP4 **H.264 + AAC at original resolution** (optional `--upscale 1440p`
+only on export), **15 s** padding, **±3 s** boundary tolerance, a `master.mp4` by default,
+**K = 5** candidate titles and **3** candidate frames per clip (selectable in the UI), and
+**deterministic** frame extraction (no LLM).
+
+**This partially reverses the 2026-07-13 removal of the topic-marking layer.** Back then the
+per-topic `topics.status` field (migration `004_drop_topic_status.sql`) was dropped because its
+only consumer — the old "export cuts" JSON feature — had been retired, so marking sat with
+**nothing downstream**; the same day the fine-grained "cut moments" pass was also removed (see
+[2026-07-13 · Removal of "cut moments"](#2026-07-13--removal-of-cut-moments-unlimited-macro-topics),
+never edited). Marking now has real consumers — triage + composition are the **entry point** for
+the virtual preview, and later for rendering, packaging and export — so it comes back. The
+**reversal is partial and by a different design**: not one status field on `topics`, but **two
+separate concepts**, so a single column can never again conflate an opinion with a membership:
+
+- **Topic triage** — the user's opinion *about a topic*, scoped to the **live** and shared across
+  its cuts. `topic_triage(video_id, topic_id, state ∈ maybe|discarded, updated_at)`; **absence of
+  a row = `open`**. Persists across sessions (a live is triaged over days).
+- **Cut membership (`in`)** — belonging *to one cut*. `cuts(id, video_id, name, status,
+  created_at)` + `cut_items(cut_id, position, topic_id NULLABLE, start_s, end_s)`. A cut is an
+  **ordered** selection of N items; an item is a topic **or** a manual range. `in` is **never**
+  written to `topic_triage` — `cut_items` is its single source of truth.
+- **Derived state** on the bench, in precedence: item in the **active** cut → `in`; else triage
+  `maybe`/`discarded`; else `open`. The click cycle writes to the right place per transition
+  (`in` adds/removes a `cut_item`; `maybe`/`discarded` write `topic_triage`; `open` clears both),
+  so state is never duplicated. Triage is per-live; `in` is per-active-cut — a topic can read
+  `in` in cut A while globally `maybe` (and so read `maybe` in cut B).
+
+**Reason:** the 2026-07-13 removal was right *for its time* (marking with no consumer is dead
+weight); the two-concept split is what keeps the returning layer from repeating the original
+mistake of one overloaded field.
 
 ### 2026-07-15 · Comments: automatic collection, manual synthesis (Phase 2 complete)
 **Type:** technical + product (methodology — guidelines 9 and 10).
